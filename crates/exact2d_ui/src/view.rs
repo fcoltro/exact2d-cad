@@ -397,9 +397,20 @@ fn canvas(ctx: &Context, app: &mut AppState, ui_state: &mut UiState) {
         if let Some(p) = response.hover_pos() {
             app.pointer_moved((p.x - origin.x) as f64, (p.y - origin.y) as f64);
         }
-        // A left click feeds the active tool. Fall back to hover_pos if the
-        // interact position is unavailable on the release frame.
-        if response.clicked() {
+        // A left click feeds the active tool. For drawing/picking tools we trigger
+        // on the button *press* rather than egui's `clicked()`: `clicked()` is
+        // suppressed when the pointer moves even a hair between press and release
+        // (egui reclassifies it as a drag, since the canvas senses click_and_drag),
+        // so a fast or slightly-moving click was being silently dropped. Acting on
+        // press makes placement instant and drag-tolerant — and matches how CAD
+        // tools place points. Select mode keeps `clicked()` so press-and-drag still
+        // drives grip editing and rubber-band selection.
+        let place_point = if matches!(app.tool, Tool::Select) {
+            response.clicked()
+        } else {
+            response.contains_pointer() && ui.input(|i| i.pointer.primary_pressed())
+        };
+        if place_point {
             if let Some(p) = response.interact_pointer_pos().or_else(|| response.hover_pos()) {
                 let mut clicked_any_grip = false;
                 if matches!(app.tool, Tool::Select) {

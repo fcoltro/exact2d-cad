@@ -415,6 +415,28 @@ pub fn intersect(c1: &Curve, c2: &Curve) -> Vec<CurveIntersection> {
     }
 }
 
+/// Fast, numeric-only intersection dispatch for **interactive** use (snapping,
+/// hover previews) where pixel accuracy is enough and per-frame latency matters.
+///
+/// Identical to [`intersect`] for the cheap exact fast paths (line/line,
+/// line/arc, arc/arc), but routes every general case — anything involving a
+/// Bézier or PolyCurve — through the numeric subdivision routine instead of the
+/// exact algebraic kernel. The exact `intersect_general` path can take ~0.16s for
+/// a single Bézier×Bézier pair, which freezes the UI when run every mouse move;
+/// the numeric path is microseconds and accurate to sub-pixel for snapping.
+pub fn intersect_numeric(c1: &Curve, c2: &Curve) -> Vec<CurveIntersection> {
+    match (c1, c2) {
+        (Curve::Line(l1), Curve::Line(l2)) =>
+            intersect_line_line(l1, l2).into_iter().collect(),
+        (Curve::Line(l), Curve::Arc(a)) | (Curve::Arc(a), Curve::Line(l)) =>
+            intersect_line_circle(l, a),
+        (Curve::Arc(a1), Curve::Arc(a2)) =>
+            intersect_circle_circle(a1, a2),
+        _ =>
+            intersect_general_numeric(c1, c2),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

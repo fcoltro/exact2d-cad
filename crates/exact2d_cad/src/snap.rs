@@ -4,7 +4,7 @@
 use exact2d_algebra::Rational;
 use exact2d_geometry::{
     Curve, CurveSegment, Point2d, BoundingBox,
-    intersect, project_point_onto_curve,
+    intersect_numeric, project_point_onto_curve,
 };
 use exact2d_document::{Document, EntityKind, EntityId};
 
@@ -154,9 +154,12 @@ pub fn find_snaps(
                 })
             })
             .collect();
+        // Use the fast numeric intersection here, not the exact algebraic kernel:
+        // snapping runs on every pointer move and only needs pixel accuracy, while
+        // the exact Bézier×Bézier path takes ~0.16s per pair and freezes the UI.
         for i in 0..curves.len() {
             for j in (i + 1)..curves.len() {
-                for hit in intersect(curves[i].1, curves[j].1) {
+                for hit in intersect_numeric(curves[i].1, curves[j].1) {
                     push_if_near(&mut out, SnapKind::Intersection, hit.point, curves[i].0, cursor, tol);
                 }
             }
@@ -307,7 +310,7 @@ fn tangent_points(c: &Curve, reference: (f64, f64)) -> Vec<(f64, f64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use exact2d_geometry::{LineSeg, CircularArc};
+    use exact2d_geometry::{LineSeg, CircularArc, CubicBezier};
     use exact2d_document::EntityKind;
 
     fn pt(x: i64, y: i64) -> Point2d { Point2d::from_i64(x, y) }
@@ -317,6 +320,36 @@ mod tests {
         let id = doc.add(EntityKind::Curve(Curve::Line(
             LineSeg::from_endpoints(pt(0, 0), pt(10, 0)))));
         (doc, id)
+    }
+
+    // Regression: two crossing cubic Béziers must not invoke the exact algebraic
+    // intersection kernel during snapping (it takes ~0.16s per pair and froze the
+    // UI on every mouse move). Intersection snapping uses `intersect_numeric`, so a
+    // full `find_snaps` over two splines should complete in well under a frame.
+    #[test]
+    fn intersection_snap_over_two_beziers_is_fast() {
+        use std::time::Instant;
+        let mut doc = Document::new();
+        // Two cubic Béziers that cross near (5, 5).
+        doc.add(EntityKind::Curve(Curve::Bezier(CubicBezier::new(
+            pt(0, 0), pt(3, 10), pt(7, 10), pt(10, 0)))));
+        doc.add(EntityKind::Curve(Curve::Bezier(CubicBezier::new(
+            pt(0, 8), pt(3, -2), pt(7, -2), pt(10, 8)))));
+        let s = SnapSettings {
+            enabled: vec![SnapKind::Intersection, SnapKind::Nearest,
+                          SnapKind::Endpoint, SnapKind::Midpoint],
+            tolerance: 1.0,
+        };
+        let start = Instant::now();
+        // Simulate 50 mouse-move frames near the crossing.
+        for _ in 0..50 {
+            let _ = find_snaps(&doc, (5.0, 5.2), &s, None);
+        }
+        let elapsed = start.elapsed();
+        // 50 frames of the exact kernel would be ~8s; numeric is milliseconds.
+        // Generous bound (debug build, slow CI) that still catches a regression.
+        assert!(elapsed.as_millis() < 500,
+            "intersection snapping over two Béziers too slow: {elapsed:?} for 50 frames");
     }
 
     #[test]

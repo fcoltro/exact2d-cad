@@ -4,7 +4,7 @@ pub mod offset;
 pub mod curvature;
 pub mod split_reverse;
 
-pub use intersect::{intersect, CurveIntersection,
+pub use intersect::{intersect, intersect_numeric, CurveIntersection,
     intersect_line_line, intersect_line_circle, intersect_circle_circle, intersect_general};
 pub use distance::{point_to_curve_distance, project_point_onto_curve,
     curve_to_curve_distance, ProjectionResult};

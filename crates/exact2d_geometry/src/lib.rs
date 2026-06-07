@@ -9,7 +9,7 @@ pub use curve::{Curve, CurveSegment};
 pub use primitives::{LineSeg, CircularArc, EllipticalArc, CubicBezier, PolyCurve, Continuity};
 pub use transform::Transform2d;
 pub use ops::{
-    intersect, CurveIntersection,
+    intersect, intersect_numeric, CurveIntersection,
     intersect_line_line, intersect_line_circle, intersect_circle_circle,
     point_to_curve_distance, project_point_onto_curve, curve_to_curve_distance,
     ProjectionResult,

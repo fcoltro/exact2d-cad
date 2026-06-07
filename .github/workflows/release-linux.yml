@@ -1,0 +1,80 @@
+name: Release (Linux)
+
+# Builds a Linux x86_64 binary of the Exact2D CAD app and publishes it as a
+# GitHub Release asset. Triggered by pushing a version tag (e.g. v0.1.0), or
+# manually from the Actions tab.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  # Match the dev machine: don't abort HTTPS fetches on cert-revocation checks.
+  CARGO_HTTP_CHECK_REVOKE: "false"
+
+permissions:
+  contents: write  # needed to create the Release
+
+jobs:
+  build-linux:
+    name: build · package · release
+    # Build on 22.04 (glibc 2.35) so the binary runs on a wide range of distros.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build release binary
+        run: cargo build --release -p exact2d_app
+
+      - name: Package
+        run: |
+          set -eu
+          VERSION="${GITHUB_REF_NAME:-manual}"
+          STAGE="exact2d-cad-${VERSION}-linux-x86_64"
+          mkdir -p "$STAGE"
+          cp target/release/exact2d_app "$STAGE/exact2d_app"
+          strip "$STAGE/exact2d_app" || true
+          cp LICENSE "$STAGE/" 2>/dev/null || true
+          cat > "$STAGE/RUN.txt" <<'EOF'
+          Exact2D CAD — Linux x86_64 build
+
+          Run:
+              chmod +x exact2d_app
+              ./exact2d_app
+
+          Requirements (present on any normal Linux desktop):
+            - OpenGL drivers (mesa)
+            - X11 or Wayland session
+            - xdg-desktop-portal (only needed for Open/Save file dialogs)
+
+          Built against glibc 2.35 (Ubuntu 22.04), so it needs a reasonably
+          recent distro (Ubuntu 22.04+, Debian 12+, Fedora 36+, or newer).
+          EOF
+          tar czf "${STAGE}.tar.gz" "$STAGE"
+          echo "ASSET=${STAGE}.tar.gz" >> "$GITHUB_ENV"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ASSET }}
+          path: ${{ env.ASSET }}
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ASSET }}
+          generate_release_notes: true

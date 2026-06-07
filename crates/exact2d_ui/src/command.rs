@@ -52,6 +52,55 @@ pub enum Command {
     Unknown(String),
 }
 
+/// A typed coordinate, in AutoCAD's input grammar.
+///
+/// - `x,y`     → [`CoordInput::Absolute`]
+/// - `@dx,dy`  → [`CoordInput::Relative`] (offset from the last point)
+/// - `d<a`     → [`CoordInput::PolarAbsolute`] (distance/angle from origin)
+/// - `@d<a`    → [`CoordInput::PolarRelative`] (distance/angle from the last point)
+///
+/// Angles are in degrees, CCW from +X (as AutoCAD).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum CoordInput {
+    Absolute(f64, f64),
+    Relative(f64, f64),
+    PolarAbsolute { dist: f64, angle_deg: f64 },
+    PolarRelative { dist: f64, angle_deg: f64 },
+}
+
+/// Parse a typed coordinate, or `None` if `input` isn't one (e.g. a bare number
+/// or a command verb). Recognises a coordinate by the `,` or `<` separator, with
+/// an optional leading `@` for relative entry.
+pub fn parse_coordinate(input: &str) -> Option<CoordInput> {
+    let s = input.trim();
+    if s.is_empty() { return None; }
+    let (relative, body) = match s.strip_prefix('@') {
+        Some(rest) => (true, rest.trim()),
+        None => (false, s),
+    };
+    // Polar: distance<angle
+    if let Some((d, a)) = body.split_once('<') {
+        let dist = d.trim().parse::<f64>().ok()?;
+        let angle_deg = a.trim().parse::<f64>().ok()?;
+        return Some(if relative {
+            CoordInput::PolarRelative { dist, angle_deg }
+        } else {
+            CoordInput::PolarAbsolute { dist, angle_deg }
+        });
+    }
+    // Cartesian: x,y
+    if let Some((x, y)) = body.split_once(',') {
+        let xv = x.trim().parse::<f64>().ok()?;
+        let yv = y.trim().parse::<f64>().ok()?;
+        return Some(if relative {
+            CoordInput::Relative(xv, yv)
+        } else {
+            CoordInput::Absolute(xv, yv)
+        });
+    }
+    None
+}
+
 /// Parse a command string. Command names are matched case-insensitively and
 /// accept common AutoCAD aliases (L, C, REC, M, CO, E, U).
 pub fn parse_command(input: &str) -> Command {
@@ -208,6 +257,22 @@ mod tests {
         assert!(matches!(parse_command("CON ANG 45"), Command::AddConstraint(ConstraintType::Angle(Some(a))) if (a - 45.0_f64.to_radians()).abs() < 1e-9));
         assert!(matches!(parse_command("CON ANG"), Command::AddConstraint(ConstraintType::Angle(None))));
         assert!(matches!(parse_command("CONSTRAINTS"), Command::ToggleConstraints));
+    }
+
+    #[test]
+    fn parses_coordinates() {
+        assert_eq!(parse_coordinate("10,20"), Some(CoordInput::Absolute(10.0, 20.0)));
+        assert_eq!(parse_coordinate("  3.5 , -4 "), Some(CoordInput::Absolute(3.5, -4.0)));
+        assert_eq!(parse_coordinate("@10,20"), Some(CoordInput::Relative(10.0, 20.0)));
+        assert_eq!(parse_coordinate("@-2.5,0"), Some(CoordInput::Relative(-2.5, 0.0)));
+        assert_eq!(parse_coordinate("5<90"), Some(CoordInput::PolarAbsolute { dist: 5.0, angle_deg: 90.0 }));
+        assert_eq!(parse_coordinate("@12<45"), Some(CoordInput::PolarRelative { dist: 12.0, angle_deg: 45.0 }));
+        // Not coordinates:
+        assert_eq!(parse_coordinate("10"), None);
+        assert_eq!(parse_coordinate("LINE"), None);
+        assert_eq!(parse_coordinate(""), None);
+        assert_eq!(parse_coordinate("@5"), None);
+        assert_eq!(parse_coordinate("a,b"), None);
     }
 
     #[test]

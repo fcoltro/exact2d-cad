@@ -476,10 +476,13 @@ fn canvas(ctx: &Context, app: &mut AppState, ui_state: &mut UiState) {
             && ctx.memory(|mem| mem.focused()) != Some(egui::Id::new("command_line_input")) {
                 app.run_command("");
             }
-        // Right click commits the active polyline
+        // Right click: commit a polyline; repeat the last command when idle;
+        // otherwise act like Enter (finish/cancel the active tool). Mirrors AutoCAD.
         if response.secondary_clicked() {
-            if let Tool::Polyline { .. } = app.tool {
-                app.run_command("");
+            match app.tool {
+                Tool::Polyline { .. } => app.run_command(""),
+                Tool::Select => app.repeat_last_command(),
+                _ => app.run_command(""),
             }
         }
         // Automatically focus command input if user starts typing when hovering the canvas and command input is not focused
@@ -1159,18 +1162,26 @@ fn canvas(ctx: &Context, app: &mut AppState, ui_state: &mut UiState) {
                 }
             }
         }
-        // Cursor crosshair across the whole canvas (proves the viewport tracks input).
+        // Full-canvas crosshair cursor (AutoCAD-style), only while the pointer is
+        // over the canvas. In Select mode, add the small square "pickbox" at the
+        // centre that AutoCAD shows when no command is active.
         let cc = to_screen(app.cursor_world.0, app.cursor_world.1);
-        let cross = Stroke::new(1.0, Color32::from_rgb(80, 90, 110));
-        painter.line_segment([pos2(rect.left(), cc.y), pos2(rect.right(), cc.y)], cross);
-        painter.line_segment([pos2(cc.x, rect.top()), pos2(cc.x, rect.bottom())], cross);
+        if response.hovered() {
+            let cross = Stroke::new(1.0, Color32::from_rgb(140, 150, 170));
+            painter.line_segment([pos2(rect.left(), cc.y), pos2(rect.right(), cc.y)], cross);
+            painter.line_segment([pos2(cc.x, rect.top()), pos2(cc.x, rect.bottom())], cross);
+            if matches!(app.tool, Tool::Select) {
+                painter.rect_stroke(
+                    egui::Rect::from_center_size(cc, vec2(10.0, 10.0)), 0.0, cross);
+            }
+        }
 
         // Dynamic dimension/distance tooltip next to the cursor (spec §4.2 dynamic input).
         let has_dims = app.tool.has_pending_input();
         let is_drawing = !matches!(app.tool, Tool::Select);
         let has_input = is_drawing || !ui_state.command_input.is_empty() || has_dims;
 
-        if has_dims || has_input {
+        if app.dyn_on && (has_dims || has_input) {
             let font_id = egui::FontId::monospace(11.0);
             let text_color = Color32::from_rgb(230, 240, 255);
             let bg_color = Color32::from_rgba_unmultiplied(20, 26, 36, 225);

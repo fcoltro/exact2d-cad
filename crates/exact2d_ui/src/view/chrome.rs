@@ -200,7 +200,7 @@ pub(super) fn status_and_command(ctx: &Context, app: &mut AppState, ui_state: &m
             ui.separator();
             ui.label(format!("Layer: {}", app.current_layer_name()));
             ui.separator();
-            ui.toggle_value(&mut app.snap_on, "SNAP");
+            ui.toggle_value(&mut app.snap_on, "OSNAP");
             ui.menu_button("▾", |ui| {
                 ui.label("Object Snapping");
                 ui.separator();
@@ -229,7 +229,14 @@ pub(super) fn status_and_command(ctx: &Context, app: &mut AppState, ui_state: &m
                 }
             });
             ui.toggle_value(&mut app.grid_on, "GRID");
-            ui.toggle_value(&mut app.ortho_on, "ORTHO");
+            // Ortho and Polar are mutually exclusive (as in AutoCAD).
+            if ui.toggle_value(&mut app.ortho_on, "ORTHO").changed() && app.ortho_on {
+                app.polar_on = false;
+            }
+            if ui.toggle_value(&mut app.polar_on, "POLAR").changed() && app.polar_on {
+                app.ortho_on = false;
+            }
+            ui.toggle_value(&mut app.dyn_on, "DYN");
             let mut con_enabled = app.constraints_enabled;
             if ui.toggle_value(&mut con_enabled, "CONSTRAINTS").changed() {
                 app.execute(Command::ToggleConstraints);

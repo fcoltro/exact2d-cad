@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use crate::view_transform::ViewTransform;
 use crate::tools::{Tool, ToolEvent};
-use crate::command::{Command, parse_command};
+use crate::command::{Command, parse_command, parse_coordinate, CoordInput};
 use crate::history::History;
 
 /// Interactive modify-tool click handling (TRIM/EXTEND/OFFSET/FILLET/CHAMFER/STRETCH).
@@ -28,6 +28,12 @@ pub struct AppState {
     pub snap_on: bool,
     pub grid_on: bool,
     pub ortho_on: bool,
+    /// Polar tracking (45° increments). Ignored while Ortho is on.
+    pub polar_on: bool,
+    /// Dynamic input: cursor-side length/angle/coordinate tooltip.
+    pub dyn_on: bool,
+    /// Last executed command text, for right-click / Enter repeat.
+    pub last_command: Option<String>,
     pub history: History,
     pub command_log: Vec<String>,
     /// Last cursor position in world coordinates (status-bar readout).
@@ -63,6 +69,9 @@ impl AppState {
             snap_on: true,
             grid_on: true,
             ortho_on: false,
+            polar_on: true,
+            dyn_on: true,
+            last_command: None,
             history: History::new(),
             command_log: Vec::new(),
             cursor_world: (0.0, 0.0),
@@ -122,7 +131,7 @@ impl AppState {
                 let dx = wx - rx;
                 let dy = wy - ry;
                 let dist = (dx * dx + dy * dy).sqrt();
-                if dist > 1e-4 {
+                if self.polar_on && dist > 1e-4 {
                     let angle_rad = dy.atan2(dx);
                     let angle_deg = angle_rad.to_degrees();
                     let angle_deg_wrapped = if angle_deg < 0.0 { angle_deg + 360.0 } else { angle_deg };
@@ -431,9 +440,43 @@ impl AppState {
             }
         }
 
+        // 3. Typed coordinate (x,y / @dx,dy / d<a / @d<a) feeds the active tool a
+        //    point, AutoCAD-style. Relative/polar-relative forms offset the last
+        //    point (the tool's reference, or the origin if none yet).
+        if let Some(coord) = parse_coordinate(trimmed) {
+            let (rx, ry) = self.tool.reference_point().map(|p| p.to_f64()).unwrap_or((0.0, 0.0));
+            let (x, y) = match coord {
+                CoordInput::Absolute(x, y) => (x, y),
+                CoordInput::Relative(dx, dy) => (rx + dx, ry + dy),
+                CoordInput::PolarAbsolute { dist, angle_deg } => {
+                    let a = angle_deg.to_radians();
+                    (dist * a.cos(), dist * a.sin())
+                }
+                CoordInput::PolarRelative { dist, angle_deg } => {
+                    let a = angle_deg.to_radians();
+                    (rx + dist * a.cos(), ry + dist * a.sin())
+                }
+            };
+            let ev = self.tool.on_point(Point2d::from_f64(x, y));
+            self.apply_tool_event(ev);
+            self.command_log.push(trimmed.to_string());
+            return;
+        }
+
         let cmd = parse_command(text);
         self.command_log.push(text.trim().to_string());
+        // Remember real commands (not Cancel/Unknown) so right-click can repeat them.
+        if !matches!(cmd, Command::Cancel | Command::Unknown(_)) {
+            self.last_command = Some(trimmed.to_string());
+        }
         self.execute(cmd);
+    }
+
+    /// Re-run the last real command (AutoCAD right-click / Enter-at-empty-prompt).
+    pub fn repeat_last_command(&mut self) {
+        if let Some(cmd) = self.last_command.clone() {
+            self.run_command(&cmd);
+        }
     }
 
     pub fn execute(&mut self, cmd: Command) {
@@ -824,6 +867,54 @@ mod tests {
     }
 
     #[test]
+    fn typed_coordinates_build_a_line() {
+        let mut a = app();
+        a.snap_on = false;
+        a.run_command("LINE");
+        a.run_command("0,0");     // absolute start
+        a.run_command("@10,0");   // relative → (10,0): commits the first segment
+
+        assert_eq!(a.document.len(), 2); // origin + one line
+        let line = a.document.iter().find(|e| e.id != a.origin_id).unwrap();
+        if let EntityKind::Curve(Curve::Line(l)) = &line.kind {
+            assert!((l.p0.x.to_f64()).abs() < 1e-9 && (l.p0.y.to_f64()).abs() < 1e-9);
+            assert!((l.p1.x.to_f64() - 10.0).abs() < 1e-9 && (l.p1.y.to_f64()).abs() < 1e-9);
+        } else {
+            panic!("expected line");
+        }
+    }
+
+    #[test]
+    fn relative_polar_coordinate_places_point() {
+        let mut a = app();
+        a.snap_on = false;
+        a.run_command("LINE");
+        a.run_command("0,0");      // start at origin
+        a.run_command("@5<90");    // 5 units at 90° → (0,5)
+
+        let line = a.document.iter().find(|e| e.id != a.origin_id).unwrap();
+        if let EntityKind::Curve(Curve::Line(l)) = &line.kind {
+            assert!((l.p1.x.to_f64()).abs() < 1e-6, "x should be ~0, got {}", l.p1.x.to_f64());
+            assert!((l.p1.y.to_f64() - 5.0).abs() < 1e-6, "y should be ~5, got {}", l.p1.y.to_f64());
+        } else {
+            panic!("expected line");
+        }
+    }
+
+    #[test]
+    fn right_click_repeat_reactivates_last_command() {
+        let mut a = app();
+        a.run_command("CIRCLE");
+        assert!(matches!(a.tool, Tool::Circle { .. }));
+        assert_eq!(a.last_command.as_deref(), Some("CIRCLE"));
+        // Finish/cancel back to Select, then repeat.
+        a.run_command(""); // Cancel → Select (does not overwrite last_command)
+        assert!(matches!(a.tool, Tool::Select));
+        a.repeat_last_command();
+        assert!(matches!(a.tool, Tool::Circle { .. }));
+    }
+
+    #[test]
     fn polygon_command_allows_side_update() {
         let mut a = app();
         a.run_command("POLYGON");
@@ -1114,5 +1205,137 @@ mod tests {
         // Find DistanceX constraint
         let found_dist = a.sketch.constraints().iter().any(|c| matches!(c, Constraint::DistanceX(..)));
         assert!(found_dist, "expected a DistanceX constraint added");
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Stage 0 — constraint refactor safety net (see docs/constraint-refactor-plan.md).
+    // These lock in the OBSERVABLE behavior the refactor must preserve. They assert
+    // geometry/document outcomes (not internal sketch structure, which will change),
+    // so they stay green across the session-scoped rewrite.
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /// Horizontal aligns a line's endpoint Y; geometry survives toggling parametric off.
+    #[test]
+    fn stage0_horizontal_solves_and_survives_toggle_off() {
+        let mut a = app();
+        let id = a.add_entity(EntityKind::Curve(Curve::Line(LineSeg::from_endpoints(pt(0,0), pt(3,4)))));
+        a.selection = vec![id];
+        a.run_command("CON H");
+        assert!(a.constraints_enabled);
+
+        let aligned = |a: &AppState| -> (f64, f64) {
+            if let Some(EntityKind::Curve(Curve::Line(l))) = a.document.get(id).map(|e| &e.kind) {
+                (l.p0.y.to_f64(), l.p1.y.to_f64())
+            } else { panic!("expected line"); }
+        };
+        let (y0, y1) = aligned(&a);
+        assert!((y0 - y1).abs() < 1e-5, "horizontal: y0={y0} y1={y1}");
+
+        // Toggle parametric OFF — geometry must persist unchanged (single source of truth).
+        a.run_command("CONSTRAINTS");
+        assert!(!a.constraints_enabled);
+        let (y0b, y1b) = aligned(&a);
+        assert!((y0 - y0b).abs() < 1e-9 && (y1 - y1b).abs() < 1e-9,
+            "geometry changed when parametric toggled off");
+    }
+
+    /// Vertical aligns a line's endpoint X.
+    #[test]
+    fn stage0_vertical_aligns_x() {
+        let mut a = app();
+        let id = a.add_entity(EntityKind::Curve(Curve::Line(LineSeg::from_endpoints(pt(0,0), pt(4,3)))));
+        a.selection = vec![id];
+        a.run_command("CON V");
+        if let Some(EntityKind::Curve(Curve::Line(l))) = a.document.get(id).map(|e| &e.kind) {
+            assert!((l.p0.x.to_f64() - l.p1.x.to_f64()).abs() < 1e-5);
+        } else { panic!("expected line"); }
+    }
+
+    /// A typed distance value sets the segment length.
+    #[test]
+    fn stage0_distance_value_sets_length() {
+        let mut a = app();
+        let id = a.add_entity(EntityKind::Curve(Curve::Line(LineSeg::from_endpoints(pt(0,0), pt(3,4)))));
+        a.selection = vec![id];
+        a.run_command("CON D 7"); // constrain length to 7
+        if let Some(EntityKind::Curve(Curve::Line(l))) = a.document.get(id).map(|e| &e.kind) {
+            let len = l.p0.dist_f64(&l.p1);
+            assert!((len - 7.0).abs() < 1e-4, "length should be 7, got {len}");
+        } else { panic!("expected line"); }
+    }
+
+    /// Perpendicular: two lines sharing a corner become perpendicular (dot ≈ 0).
+    #[test]
+    fn stage0_perpendicular_solves() {
+        let mut a = app();
+        let l1 = a.add_entity(EntityKind::Curve(Curve::Line(LineSeg::from_endpoints(pt(0,0), pt(5,0)))));
+        let l2 = a.add_entity(EntityKind::Curve(Curve::Line(LineSeg::from_endpoints(pt(0,0), pt(3,1)))));
+        a.selection = vec![l1, l2];
+        a.run_command("CON PERP");
+        if let (Some(EntityKind::Curve(Curve::Line(a1))), Some(EntityKind::Curve(Curve::Line(b1)))) =
+            (a.document.get(l1).map(|e| &e.kind), a.document.get(l2).map(|e| &e.kind)) {
+            let (ux, uy) = (a1.p1.x.to_f64() - a1.p0.x.to_f64(), a1.p1.y.to_f64() - a1.p0.y.to_f64());
+            let (vx, vy) = (b1.p1.x.to_f64() - b1.p0.x.to_f64(), b1.p1.y.to_f64() - b1.p0.y.to_f64());
+            let dot = ux * vx + uy * vy;
+            assert!(dot.abs() < 1e-4, "lines should be perpendicular, dot={dot}");
+        } else { panic!("expected two lines"); }
+    }
+
+    /// A polyline's shared interior vertex resolves to a single point (intended sharing).
+    /// The refactor must preserve this connectivity (Stage 3 makes it by construction).
+    #[test]
+    fn stage0_polyline_shared_vertex_is_single_point() {
+        let mut a = app();
+        a.run_command("PL");
+        for (wx, wy) in [(0.0, 0.0), (5.0, 5.0), (10.0, 0.0)] {
+            let (sx, sy) = a.view.world_to_screen(wx, wy);
+            a.canvas_click(sx, sy);
+        }
+        a.run_command(""); // commit polyline
+        let poly_id = a.document.iter().find(|e| e.id != a.origin_id).map(|e| e.id).unwrap();
+
+        a.run_command("CONSTRAINTS"); // enter parametric → build the session
+        let pts = a.entity_points.get(&poly_id).cloned().expect("polyline points");
+        assert_eq!(pts.len(), 4, "two segments register four endpoints");
+        assert_eq!(pts[1], pts[2], "the shared interior vertex must be one point");
+    }
+
+    /// Auto radius-equality keeps an arc circular after a point is dragged off-radius.
+    #[test]
+    fn stage0_arc_stays_circular_after_solve() {
+        let mut a = app();
+        let arc_id = a.add_entity(EntityKind::Curve(Curve::Arc(
+            CircularArc::new(pt(0,0), Rational::from(5i64), 0.0, std::f64::consts::PI))));
+        a.run_command("CONSTRAINTS"); // build session; auto EqualLength(center-start, center-end)
+        let pts = a.entity_points.get(&arc_id).cloned().expect("arc points"); // [center, start, end]
+        assert_eq!(pts.len(), 3);
+
+        // Drag the end point to a different radius, then re-solve.
+        a.sketch.set_point(pts[2], 10.0, 0.0);
+        a.solve_constraints();
+
+        let (cx, cy) = a.sketch.point(pts[0]);
+        let (sx, sy) = a.sketch.point(pts[1]);
+        let (ex, ey) = a.sketch.point(pts[2]);
+        let r_start = ((sx - cx).powi(2) + (sy - cy).powi(2)).sqrt();
+        let r_end = ((ex - cx).powi(2) + (ey - cy).powi(2)).sqrt();
+        assert!((r_start - r_end).abs() < 1e-4,
+            "arc should stay circular: r_start={r_start} r_end={r_end}");
+    }
+
+    /// TARGET behavior for Stage 3: two unrelated lines that merely share a coordinate
+    /// must NOT be welded into the same point. Currently they are (positional dedup in
+    /// `register_point`), so this is ignored until the welding fix lands.
+    #[test]
+    #[ignore = "Stage 3: coincidence must be by intent — independent endpoints at the same location must stay distinct"]
+    fn stage0_independent_coincident_located_endpoints_stay_independent() {
+        let mut a = app();
+        let l1 = a.add_entity(EntityKind::Curve(Curve::Line(LineSeg::from_endpoints(pt(0,0), pt(10,0)))));
+        let l2 = a.add_entity(EntityKind::Curve(Curve::Line(LineSeg::from_endpoints(pt(0,0), pt(0,10)))));
+        a.run_command("CONSTRAINTS"); // build session
+        let p1 = a.entity_points.get(&l1).cloned().unwrap();
+        let p2 = a.entity_points.get(&l2).cloned().unwrap();
+        assert_ne!(p1[0], p2[0],
+            "endpoints of unrelated lines at the same location must not be welded");
     }
 }

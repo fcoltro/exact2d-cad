@@ -1,0 +1,8 @@
+[package]
+name = "exact2d_geometry"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+exact2d_algebra = { path = "../exact2d_algebra" }
+exact2d_integer  = { path = "../exact2d_integer" }

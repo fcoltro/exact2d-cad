@@ -1,0 +1,9 @@
+[package]
+name = "exact2d_boolean"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+exact2d_geometry = { path = "../exact2d_geometry" }
+exact2d_algebra  = { path = "../exact2d_algebra" }
+exact2d_spatial  = { path = "../exact2d_spatial" }

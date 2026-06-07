@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/exact2d_integer",
+    "crates/exact2d_algebra",
+    "crates/exact2d_geometry",
+    "crates/exact2d_spatial",
+    "crates/exact2d_boolean",
+    "crates/exact2d_document",
+    "crates/exact2d_cad",
+    "crates/exact2d_constraint",
+    "crates/exact2d_io",
+    "crates/exact2d_ui",
+    "apps/exact2d_app",
+]

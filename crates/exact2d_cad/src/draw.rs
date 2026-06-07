@@ -1,0 +1,169 @@
+//! Drawing commands (spec §4.3): LINE, CIRCLE, ARC, ELLIPSE, RECTANGLE, POLYGON,
+//! POLYLINE, POINT. Each adds one or more entities to the document and returns ids.
+
+use exact2d_algebra::Rational;
+use exact2d_geometry::{
+    Curve, Point2d, LineSeg, CircularArc, EllipticalArc, CubicBezier, PolyCurve,
+};
+use exact2d_document::{Document, EntityId, EntityKind};
+
+/// LINE: a single segment between two points.
+pub fn line(doc: &mut Document, a: Point2d, b: Point2d) -> EntityId {
+    doc.add(EntityKind::Curve(Curve::Line(LineSeg::from_endpoints(a, b))))
+}
+
+/// LINE (multi): connected segments through a sequence of points.
+/// Returns one entity id per segment.
+pub fn polyline_open(doc: &mut Document, points: &[Point2d]) -> Vec<EntityId> {
+    points.windows(2)
+        .map(|w| line(doc, w[0].clone(), w[1].clone()))
+        .collect()
+}
+
+/// CIRCLE: center + radius (full circle).
+pub fn circle(doc: &mut Document, center: Point2d, radius: Rational) -> EntityId {
+    let arc = CircularArc::new(center, radius, 0.0, 2.0 * std::f64::consts::PI);
+    doc.add(EntityKind::Curve(Curve::Arc(arc)))
+}
+
+/// CIRCLE (3-point): circle through three points. None if collinear.
+pub fn circle_3p(doc: &mut Document, p1: &Point2d, p2: &Point2d, p3: &Point2d) -> Option<EntityId> {
+    let arc = CircularArc::from_three_points(p1, p2, p3)?;
+    let full = CircularArc::new(arc.center, arc.radius, 0.0, 2.0 * std::f64::consts::PI);
+    Some(doc.add(EntityKind::Curve(Curve::Arc(full))))
+}
+
+/// ARC: center, radius, start & end angle (radians, CCW).
+pub fn arc(doc: &mut Document, center: Point2d, radius: Rational, start: f64, end: f64) -> EntityId {
+    doc.add(EntityKind::Curve(Curve::Arc(CircularArc::new(center, radius, start, end))))
+}
+
+/// ELLIPSE: center, semi-axes, rotation, full sweep.
+pub fn ellipse(doc: &mut Document, center: Point2d, major: Rational, minor: Rational, rotation: f64) -> EntityId {
+    let e = EllipticalArc::new(center, major, minor, rotation, 0.0, 2.0 * std::f64::consts::PI);
+    doc.add(EntityKind::Curve(Curve::Ellipse(e)))
+}
+
+/// RECTANGLE: from two opposite corners, as 4 line segments (CCW from min corner).
+pub fn rectangle(doc: &mut Document, c0: &Point2d, c1: &Point2d) -> Vec<EntityId> {
+    let (x0, x1) = order(c0.x.clone(), c1.x.clone());
+    let (y0, y1) = order(c0.y.clone(), c1.y.clone());
+    let p = |x: &Rational, y: &Rational| Point2d::new(x.clone(), y.clone());
+    let corners = [
+        p(&x0, &y0), p(&x1, &y0), p(&x1, &y1), p(&x0, &y1),
+    ];
+    (0..4).map(|i| line(doc, corners[i].clone(), corners[(i + 1) % 4].clone())).collect()
+}
+
+/// POLYGON: regular n-gon. `inscribed` = vertices on the circle of `radius`;
+/// otherwise circumscribed (edge midpoints on the circle). Returns edge ids.
+pub fn polygon(doc: &mut Document, center: &Point2d, n: u32, radius: f64, inscribed: bool, start_angle: f64) -> Vec<EntityId> {
+    assert!(n >= 3, "polygon needs ≥3 sides");
+    let r = if inscribed { radius } else { radius / (std::f64::consts::PI / n as f64).cos() };
+    let (cx, cy) = center.to_f64();
+    let verts: Vec<Point2d> = (0..n).map(|i| {
+        let a = start_angle + 2.0 * std::f64::consts::PI * i as f64 / n as f64;
+        Point2d::from_f64(cx + r * a.cos(), cy + r * a.sin())
+    }).collect();
+    (0..n as usize).map(|i| line(doc, verts[i].clone(), verts[(i + 1) % n as usize].clone())).collect()
+}
+
+/// SPLINE (fit by cubic Bézier): a single cubic from 4 control vertices.
+pub fn bezier(doc: &mut Document, p0: Point2d, p1: Point2d, p2: Point2d, p3: Point2d) -> EntityId {
+    doc.add(EntityKind::Curve(Curve::Bezier(CubicBezier::new(p0, p1, p2, p3))))
+}
+
+/// POLYLINE (mixed lines+arcs) bundled into one PolyCurve entity.
+pub fn polycurve(doc: &mut Document, segments: Vec<Curve>) -> EntityId {
+    doc.add(EntityKind::Curve(Curve::Poly(Box::new(PolyCurve::new(segments)))))
+}
+
+/// POINT: a node entity.
+pub fn point(doc: &mut Document, p: Point2d) -> EntityId {
+    doc.add(EntityKind::Point(p))
+}
+
+/// DIVIDE: place `n−1` point entities dividing a curve into `n` equal parameter spans.
+pub fn divide(doc: &mut Document, curve: &Curve, n: u32) -> Vec<EntityId> {
+    use exact2d_geometry::CurveSegment;
+    let (t0, t1) = curve.domain();
+    (1..n).map(|i| {
+        let t = t0 + (t1 - t0) * i as f64 / n as f64;
+        let (x, y) = curve.evaluate_f64(t);
+        point(doc, Point2d::from_f64(x, y))
+    }).collect()
+}
+
+fn order(a: Rational, b: Rational) -> (Rational, Rational) {
+    if a <= b { (a, b) } else { (b, a) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pt(x: i64, y: i64) -> Point2d { Point2d::from_i64(x, y) }
+    fn r(n: i64) -> Rational { Rational::from(n) }
+
+    #[test]
+    fn draw_line_and_circle() {
+        let mut doc = Document::new();
+        line(&mut doc, pt(0,0), pt(5,5));
+        circle(&mut doc, pt(2,2), r(3));
+        assert_eq!(doc.len(), 2);
+    }
+
+    #[test]
+    fn rectangle_has_four_sides_and_correct_extents() {
+        let mut doc = Document::new();
+        let ids = rectangle(&mut doc, &pt(0,0), &pt(4,3));
+        assert_eq!(ids.len(), 4);
+        let bb = doc.extents().unwrap();
+        assert_eq!(bb.min, pt(0,0));
+        assert_eq!(bb.max, pt(4,3));
+    }
+
+    #[test]
+    fn polygon_vertex_count() {
+        let mut doc = Document::new();
+        let edges = polygon(&mut doc, &pt(0,0), 6, 5.0, true, 0.0);
+        assert_eq!(edges.len(), 6); // hexagon → 6 edges
+    }
+
+    #[test]
+    fn inscribed_polygon_vertices_on_circle() {
+        let mut doc = Document::new();
+        polygon(&mut doc, &pt(0,0), 4, 5.0, true, 0.0);
+        // Every endpoint must lie at radius 5 from the center
+        for e in doc.iter() {
+            if let Some(Curve::Line(l)) = e.as_curve() {
+                let d = (l.p0.x.to_f64().powi(2) + l.p0.y.to_f64().powi(2)).sqrt();
+                assert!((d - 5.0).abs() < 1e-6, "vertex not on circle: d={}", d);
+            }
+        }
+    }
+
+    #[test]
+    fn divide_creates_n_minus_1_points() {
+        let mut doc = Document::new();
+        let c = Curve::Line(LineSeg::from_endpoints(pt(0,0), pt(10,0)));
+        let pts = divide(&mut doc, &c, 5);
+        assert_eq!(pts.len(), 4);
+        // First division point at (2,0)
+        let first = doc.get(pts[0]).unwrap();
+        if let EntityKind::Point(p) = &first.kind {
+            assert!((p.x.to_f64() - 2.0).abs() < 1e-6);
+        } else { panic!() }
+    }
+
+    #[test]
+    fn circle_3p_through_points() {
+        let mut doc = Document::new();
+        let id = circle_3p(&mut doc, &Point2d::from_f64(1.0,0.0),
+            &Point2d::from_f64(0.0,1.0), &Point2d::from_f64(-1.0,0.0)).unwrap();
+        if let Some(Curve::Arc(a)) = doc.get(id).unwrap().as_curve() {
+            assert!(a.center.x.to_f64().abs() < 1e-9 && a.center.y.to_f64().abs() < 1e-9);
+            assert!((a.radius.to_f64() - 1.0).abs() < 1e-6);
+        } else { panic!() }
+    }
+}

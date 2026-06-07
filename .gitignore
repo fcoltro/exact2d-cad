@@ -1,0 +1,18 @@
+# Rust build artifacts
+/target
+**/*.rs.bk
+*.pdb
+*.exe
+
+# Cargo lock is kept (workspace with binaries) — do not ignore Cargo.lock
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+*.swp
+
+# Local Claude Code settings (machine-specific permission allowlist)
+.claude/settings.local.json
+
+# Runtime log dropped next to the binary
+exact2d_log.txt

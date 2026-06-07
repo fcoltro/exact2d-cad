@@ -1,0 +1,11 @@
+[package]
+name = "exact2d_app"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+exact2d_algebra  = { path = "../../crates/exact2d_algebra" }
+exact2d_ui       = { path = "../../crates/exact2d_ui" }
+# Windowing host for the egui UI. The default (glow) backend draws the egui
+# painter viewport; there is no separate GPU renderer.
+eframe = "0.29"

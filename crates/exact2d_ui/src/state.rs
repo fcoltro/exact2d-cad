@@ -296,6 +296,17 @@ impl AppState {
             return;
         }
 
+        // TEXT tool: the first click sets the anchor; the content is then typed at
+        // the command line (handled in run_command).
+        if let Tool::Text { anchor, height } = &self.tool {
+            let height = *height;
+            let need_anchor = anchor.is_none();
+            if need_anchor {
+                self.tool = Tool::Text { anchor: Some(p.clone()), height };
+            }
+            return;
+        }
+
         // SELECT tool: pick the entity under the cursor and toggle it.
         if matches!(self.tool, Tool::Select) {
             if let Some(id) = pick_at(&self.document, p.x.to_f64(), p.y.to_f64(),
@@ -409,6 +420,24 @@ impl AppState {
     /// Parse and run a command-line string.
     pub fn run_command(&mut self, text: &str) {
         let trimmed = text.trim();
+
+        // 0. TEXT tool: once the anchor is placed, the next command-line entry is
+        // the text content (taken literally; `\n` becomes a line break, so one
+        // unified tool handles single- and multi-line text). Empty cancels.
+        if let Tool::Text { anchor: Some(p), height } = self.tool.clone() {
+            if !trimmed.is_empty() {
+                self.history.snapshot(&self.document, &self.sketch, &self.entity_points);
+                self.document.add(EntityKind::Text {
+                    anchor: p,
+                    content: trimmed.replace("\\n", "\n"),
+                    height,
+                    rotation: 0.0,
+                });
+            }
+            self.tool = Tool::Select;
+            self.command_log.push(trimmed.to_string());
+            return;
+        }
 
         // 1. Intercept Polyline commit / close commands
         if let Tool::Polyline { .. } = self.tool {
@@ -1259,6 +1288,23 @@ mod tests {
             _ => None,
         }).expect("a Dimension entity should be created");
         assert!((dim.measure() - 10.0).abs() < 1e-6, "dimension measures {}", dim.measure());
+    }
+
+    #[test]
+    fn text_tool_places_text_entity() {
+        let mut a = app();
+        a.run_command("TEXT");
+        assert!(matches!(a.tool, Tool::Text { anchor: None, .. }));
+        let (sx, sy) = a.view.world_to_screen(2.0, 3.0);
+        a.canvas_click(sx, sy); // set anchor
+        assert!(matches!(a.tool, Tool::Text { anchor: Some(_), .. }));
+        a.run_command("Hello\\nWorld"); // typed content; \n → line break
+        assert!(matches!(a.tool, Tool::Select));
+        let content = a.document.iter().find_map(|e| match &e.kind {
+            EntityKind::Text { content, .. } => Some(content.clone()),
+            _ => None,
+        }).expect("a Text entity should be created");
+        assert_eq!(content, "Hello\nWorld", "single unified tool handles multi-line via \\n");
     }
 
     // ──────────────────────────────────────────────────────────────────────────

@@ -99,6 +99,7 @@ pub(super) fn menu_bar(ctx: &Context, app: &mut AppState) {
                 tool_menu_item(ui, app, "Spline", Tool::Spline { pts: vec![] });
                 tool_menu_item(ui, app, "Polyline", Tool::Polyline { pts: vec![] });
                 tool_menu_item(ui, app, "Smart Dimension", Tool::Dimension { stage: 0, p1: None, p2: None });
+                tool_menu_item(ui, app, "Text", Tool::Text { anchor: None, height: 2.5 });
             });
             ui.menu_button("Modify", |ui| {
                 tool_menu_item(ui, app, "Move", Tool::Move { base: None, ids: vec![] });

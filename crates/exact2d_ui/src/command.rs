@@ -131,6 +131,8 @@ pub fn parse_command(input: &str) -> Command {
                                 => Command::Activate(Tool::Polyline { pts: vec![] }),
         "SELECT" | "SE"         => Command::Activate(Tool::Select),
         "DIMENSION" | "DIM" | "D" => Command::Activate(Tool::Dimension { stage: 0, p1: None, p2: None }),
+        "TEXT" | "T" | "DT" | "DTEXT" | "MTEXT" | "MT"
+                                => Command::Activate(Tool::Text { anchor: None, height: 2.5 }),
         "ROTATE" | "RO"         => Command::Activate(Tool::Rotate { base: None, ids: vec![] }),
         "SCALE" | "SC"          => Command::Activate(Tool::Scale { base: None, reference: None, ids: vec![] }),
         "MIRROR" | "MI"         => Command::Activate(Tool::Mirror { first: None, ids: vec![] }),

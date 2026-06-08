@@ -36,6 +36,9 @@ pub enum Tool {
     Polygon { center: Option<Point2d>, sides: usize },
     /// Click points/entities to dimension, then click to place.
     Dimension { stage: usize, p1: Option<usize>, p2: Option<usize> },
+    /// Unified text: click to set the anchor, then type the content (single- or
+    /// multi-line) at the command line to create a Text entity.
+    Text { anchor: Option<Point2d>, height: f64 },
 
     // ── Modify tools ────────────────────────────────────────────────────────
     /// Rotate the selection: base point, then a point giving the angle.
@@ -86,6 +89,7 @@ impl Tool {
             Tool::Polyline { .. } => "POLYLINE",
             Tool::Polygon { .. } => "POLYGON",
             Tool::Dimension { .. } => "DIMENSION",
+            Tool::Text { .. } => "TEXT",
             Tool::Rotate { .. } => "ROTATE",
             Tool::Scale { .. } => "SCALE",
             Tool::Mirror { .. } => "MIRROR",
@@ -106,7 +110,7 @@ impl Tool {
     /// Feed a (possibly snapped) world point to the tool.
     pub fn on_point(&mut self, p: Point2d) -> ToolEvent {
         match self {
-            Tool::Select | Tool::Dimension { .. } => ToolEvent::Pending,
+            Tool::Select | Tool::Dimension { .. } | Tool::Text { .. } => ToolEvent::Pending,
 
             Tool::Line { last } => {
                 let ev = match last.take() {
@@ -289,6 +293,7 @@ impl Tool {
             Tool::Fillet { first, .. } => *first = None,
             Tool::Chamfer { first, .. } => *first = None,
             Tool::Stretch { c1, c2, base, .. } => { *c1 = None; *c2 = None; *base = None; }
+            Tool::Text { anchor, .. } => *anchor = None,
             Tool::Trim | Tool::Extend | Tool::Select => {}
         }
     }
@@ -312,6 +317,7 @@ impl Tool {
             Tool::Fillet { first, .. } => first.is_some(),
             Tool::Chamfer { first, .. } => first.is_some(),
             Tool::Stretch { c1, .. } => c1.is_some(),
+            Tool::Text { anchor, .. } => anchor.is_some(),
             Tool::Trim | Tool::Extend | Tool::Select => false,
         }
     }
@@ -417,7 +423,7 @@ impl Tool {
             Tool::Scale { base, .. } => base.clone(),
             Tool::Mirror { first, .. } => first.clone(),
             Tool::Stretch { base, c1, .. } => base.clone().or_else(|| c1.clone()),
-            Tool::Dimension { .. }
+            Tool::Dimension { .. } | Tool::Text { .. }
             | Tool::Trim | Tool::Extend
             | Tool::Offset { .. } | Tool::Fillet { .. } | Tool::Chamfer { .. } => None,
             Tool::Select => None,

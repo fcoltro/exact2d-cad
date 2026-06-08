@@ -73,6 +73,7 @@ impl Default for Settings {
 #[derive(Clone)]
 pub struct Document {
     pub layers: LayerTable,
+    pub dim_styles: crate::dimension::DimStyleTable,
     pub line_types: Vec<LineTypeDef>,
     pub blocks: HashMap<String, Block>,
     /// Model-space entities, keyed by id for stable references.
@@ -88,6 +89,7 @@ impl Default for Document {
     fn default() -> Self {
         Document {
             layers: LayerTable::default(),
+            dim_styles: crate::dimension::DimStyleTable::default(),
             line_types: vec![
                 LineTypeDef::continuous(),
                 LineTypeDef::dashed(),

@@ -5,7 +5,7 @@
 use exact2d_algebra::Rational;
 use exact2d_geometry::{Point2d, Curve};
 use exact2d_document::{Document, EntityKind, EntityId, Layer};
-use exact2d_cad::{SnapSettings, SnapPoint, best_snap, pick_at};
+use exact2d_cad::{SnapSettings, SnapPoint, SnapKind, best_snap, pick_at};
 use exact2d_constraint::{Sketch, Constraint, PointId};
 use std::collections::HashMap;
 
@@ -50,6 +50,10 @@ pub struct AppState {
     pub sketch: Sketch,
     pub entity_points: HashMap<EntityId, Vec<PointId>>,
     pub origin_id: EntityId,
+    /// Snap-to-endpoint connections recorded during the current draw (parametric
+    /// mode only), materialized into Coincident constraints when the entity is
+    /// created (Stage 3). Each entry is (snapped world x, y, the snapped-to entity).
+    pending_snap_links: Vec<(f64, f64, EntityId)>,
 
     /// Path of the currently open file, if any.
     pub current_file_path: Option<std::path::PathBuf>,
@@ -83,6 +87,7 @@ impl AppState {
             sketch: Sketch::new(),
             entity_points: HashMap::new(),
             origin_id,
+            pending_snap_links: Vec::new(),
 
             current_file_path: None,
         };
@@ -280,6 +285,16 @@ impl AppState {
         }
 
         // Drawing/edit tool: feed the point and apply the resulting event.
+        // In parametric mode, remember if this point snapped onto an existing
+        // endpoint/node — it becomes a Coincident constraint when the entity is
+        // created, so snap-drawn geometry stays connected (Stage 3, by intent).
+        if self.constraints_enabled {
+            if let Some(sp) = self.active_snap.clone() {
+                if matches!(sp.kind, SnapKind::Endpoint | SnapKind::Node) {
+                    self.pending_snap_links.push((sp.pos.0, sp.pos.1, sp.entity));
+                }
+            }
+        }
         let ev = self.tool.on_point(p);
         self.apply_tool_event(ev);
     }
@@ -289,13 +304,18 @@ impl AppState {
             ToolEvent::Pending => {}
             ToolEvent::Create(kinds) => {
                 self.history.snapshot(&self.document, &self.sketch, &self.entity_points);
-                for k in kinds { self.document.add(k); }
+                let new_ids: Vec<EntityId> = kinds.into_iter().map(|k| self.document.add(k)).collect();
                 if self.constraints_enabled {
                     self.sync_sketch_from_document();
+                    // Turn snap-to-endpoint picks made while drawing into Coincident
+                    // constraints linking the new geometry to what it snapped onto.
+                    self.materialize_snap_links(&new_ids);
                     self.solve_constraints();
                 }
+                self.pending_snap_links.clear();
             }
             ToolEvent::Transform { ids, t } => {
+                self.pending_snap_links.clear();
                 self.history.snapshot(&self.document, &self.sketch, &self.entity_points);
                 if self.constraints_enabled {
                     let mut moved_pts = std::collections::HashSet::new();
@@ -331,6 +351,7 @@ impl AppState {
                 self.tool = Tool::Select;
             }
             ToolEvent::CopyOf { ids, t } => {
+                self.pending_snap_links.clear();
                 self.history.snapshot(&self.document, &self.sketch, &self.entity_points);
                 for id in ids {
                     if id != self.origin_id {
@@ -491,9 +512,10 @@ impl AppState {
                         *ids = self.selection.clone(),
                     _ => {}
                 }
+                self.pending_snap_links.clear();
                 self.tool = tool;
             }
-            Command::Cancel => { self.tool.reset(); if matches!(self.tool, Tool::Select) { self.selection.clear(); } self.tool = Tool::Select; }
+            Command::Cancel => { self.pending_snap_links.clear(); self.tool.reset(); if matches!(self.tool, Tool::Select) { self.selection.clear(); } self.tool = Tool::Select; }
             Command::Undo => self.undo(),
             Command::Redo => self.redo(),
             Command::Erase => self.erase_selection(),
@@ -1324,11 +1346,10 @@ mod tests {
             "arc should stay circular: r_start={r_start} r_end={r_end}");
     }
 
-    /// TARGET behavior for Stage 3: two unrelated lines that merely share a coordinate
-    /// must NOT be welded into the same point. Currently they are (positional dedup in
-    /// `register_point`), so this is ignored until the welding fix lands.
+    /// Two unrelated lines that merely share a coordinate must NOT be welded into
+    /// the same point. Fixed in Stage 2 (per-entity `push_point` replaced the global
+    /// proximity dedup), so this now passes — independent geometry stays distinct.
     #[test]
-    #[ignore = "Stage 3: coincidence must be by intent — independent endpoints at the same location must stay distinct"]
     fn stage0_independent_coincident_located_endpoints_stay_independent() {
         let mut a = app();
         let l1 = a.add_entity(EntityKind::Curve(Curve::Line(LineSeg::from_endpoints(pt(0,0), pt(10,0)))));
@@ -1385,6 +1406,57 @@ mod tests {
         assert!(a.constraints_enabled);
         assert!(!a.entity_points.is_empty(), "re-entering rebuilds the overlay");
         assert!(a.entity_points.contains_key(&id), "the line is registered again");
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Stage 3 — coincidence by intent: snap-to-endpoint while drawing links the new
+    // geometry to what it snapped onto (see docs/constraint-refactor-plan.md).
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /// Snapping a new line's start onto an existing endpoint adds a Coincident
+    /// constraint linking them.
+    #[test]
+    fn stage3_snap_to_endpoint_while_drawing_adds_coincidence() {
+        let mut a = app();
+        a.run_command("CONSTRAINTS"); // enter parametric
+        let la = a.add_entity(EntityKind::Curve(Curve::Line(LineSeg::from_endpoints(pt(0,0), pt(10,0)))));
+
+        a.tool = Tool::Line { last: None };
+        a.snap.enabled = vec![SnapKind::Endpoint];
+        a.snap_on = true;
+        let (s1x, s1y) = a.view.world_to_screen(10.0, 0.0); // onto A's endpoint
+        a.canvas_click(s1x, s1y);
+        a.snap_on = false; // second point free
+        let (s2x, s2y) = a.view.world_to_screen(10.0, 10.0);
+        a.canvas_click(s2x, s2y);
+
+        let lb = a.document.iter().find(|e| e.id != a.origin_id && e.id != la).map(|e| e.id)
+            .expect("line B created");
+        let a_end = a.entity_points.get(&la).unwrap()[1];  // A's (10,0) endpoint
+        let b_start = a.entity_points.get(&lb).unwrap()[0]; // B's start
+        let linked = a.sketch.constraints().iter().any(|c| matches!(c,
+            Constraint::Coincident(x, y)
+                if (*x == a_end && *y == b_start) || (*x == b_start && *y == a_end)));
+        assert!(linked, "snapping B's start onto A's endpoint should add Coincident(A_end, B_start)");
+    }
+
+    /// Without an active snap, drawing a point at the same location as an existing
+    /// endpoint does NOT auto-link — coincidence is by intent only (not proximity).
+    #[test]
+    fn stage3_no_coincidence_without_snap() {
+        let mut a = app();
+        a.run_command("CONSTRAINTS");
+        let _la = a.add_entity(EntityKind::Curve(Curve::Line(LineSeg::from_endpoints(pt(0,0), pt(10,0)))));
+
+        a.tool = Tool::Line { last: None };
+        a.snap_on = false; // no snapping
+        let (s1x, s1y) = a.view.world_to_screen(10.0, 0.0); // same spot as A's end, but no snap
+        a.canvas_click(s1x, s1y);
+        let (s2x, s2y) = a.view.world_to_screen(10.0, 10.0);
+        a.canvas_click(s2x, s2y);
+
+        let has_coincident = a.sketch.constraints().iter().any(|c| matches!(c, Constraint::Coincident(..)));
+        assert!(!has_coincident, "no snap → no auto-coincidence, even at the same location");
     }
 
     /// The dimension tool enters parametric mode on first use (dimensions are

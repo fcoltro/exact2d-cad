@@ -238,17 +238,24 @@ impl AppState {
                 self.solve_constraints();
     }
 
-    pub fn register_point(&mut self, x: f64, y: f64) -> PointId {
-        let tol = 1e-4;
-        for id in 0..self.sketch.num_points() {
+    /// Register a point for the entity currently being built, appending its id to
+    /// `pts`. It shares only with points already registered for THAT SAME entity —
+    /// so a polyline's shared joints and a full circle's coincident start/end
+    /// collapse to one point — but it never welds to *other* entities' points.
+    /// Independent geometry that merely touches at a location stays distinct (the
+    /// Stage 2 welding fix); intentional connections between entities are made
+    /// explicitly via constraints (Stage 3). See docs/constraint-refactor-plan.md.
+    fn push_point(&mut self, pts: &mut Vec<PointId>, x: f64, y: f64) {
+        let tol = 1e-6;
+        for &id in pts.iter() {
             let (px, py) = self.sketch.point(id);
-            let dx = px - x;
-            let dy = py - y;
-            if (dx * dx + dy * dy).sqrt() < tol {
-                return id;
+            if (px - x).hypot(py - y) < tol {
+                pts.push(id);
+                return;
             }
         }
-        self.sketch.add_point(x, y)
+        let id = self.sketch.add_point(x, y);
+        pts.push(id);
     }
 
     pub fn sync_sketch_from_document(&mut self) {
@@ -269,26 +276,26 @@ impl AppState {
                 EntityKind::Curve(Curve::Line(line)) => {
                     let (x0, y0) = line.p0.to_f64();
                     let (x1, y1) = line.p1.to_f64();
-                    pts.push(self.register_point(x0, y0));
-                    pts.push(self.register_point(x1, y1));
+                    self.push_point(&mut pts, x0, y0);
+                    self.push_point(&mut pts, x1, y1);
                 }
                 EntityKind::Curve(Curve::Arc(arc)) => {
                     let (cx, cy) = arc.center.to_f64();
                     let (ax, ay) = arc.start_point();
                     let (bx, by) = arc.end_point();
-                    pts.push(self.register_point(cx, cy));
-                    pts.push(self.register_point(ax, ay));
-                    pts.push(self.register_point(bx, by));
+                    self.push_point(&mut pts, cx, cy);
+                    self.push_point(&mut pts, ax, ay);
+                    self.push_point(&mut pts, bx, by);
                 }
                 EntityKind::Curve(Curve::Bezier(bezier)) => {
                     let (x0, y0) = bezier.p0.to_f64();
                     let (x1, y1) = bezier.p1.to_f64();
                     let (x2, y2) = bezier.p2.to_f64();
                     let (x3, y3) = bezier.p3.to_f64();
-                    pts.push(self.register_point(x0, y0));
-                    pts.push(self.register_point(x1, y1));
-                    pts.push(self.register_point(x2, y2));
-                    pts.push(self.register_point(x3, y3));
+                    self.push_point(&mut pts, x0, y0);
+                    self.push_point(&mut pts, x1, y1);
+                    self.push_point(&mut pts, x2, y2);
+                    self.push_point(&mut pts, x3, y3);
                 }
                 EntityKind::Curve(Curve::Poly(poly)) => {
                     for seg in &poly.segments {
@@ -296,26 +303,26 @@ impl AppState {
                             Curve::Line(line) => {
                                 let (x0, y0) = line.p0.to_f64();
                                 let (x1, y1) = line.p1.to_f64();
-                                pts.push(self.register_point(x0, y0));
-                                pts.push(self.register_point(x1, y1));
+                                self.push_point(&mut pts, x0, y0);
+                                self.push_point(&mut pts, x1, y1);
                             }
                             Curve::Arc(arc) => {
                                 let (cx, cy) = arc.center.to_f64();
                                 let (ax, ay) = arc.start_point();
                                 let (bx, by) = arc.end_point();
-                                pts.push(self.register_point(cx, cy));
-                                pts.push(self.register_point(ax, ay));
-                                pts.push(self.register_point(bx, by));
+                                self.push_point(&mut pts, cx, cy);
+                                self.push_point(&mut pts, ax, ay);
+                                self.push_point(&mut pts, bx, by);
                             }
                             Curve::Bezier(bezier) => {
                                 let (x0, y0) = bezier.p0.to_f64();
                                 let (x1, y1) = bezier.p1.to_f64();
                                 let (x2, y2) = bezier.p2.to_f64();
                                 let (x3, y3) = bezier.p3.to_f64();
-                                pts.push(self.register_point(x0, y0));
-                                pts.push(self.register_point(x1, y1));
-                                pts.push(self.register_point(x2, y2));
-                                pts.push(self.register_point(x3, y3));
+                                self.push_point(&mut pts, x0, y0);
+                                self.push_point(&mut pts, x1, y1);
+                                self.push_point(&mut pts, x2, y2);
+                                self.push_point(&mut pts, x3, y3);
                             }
                             _ => {}
                         }
@@ -323,7 +330,7 @@ impl AppState {
                 }
                 EntityKind::Point(pt) => {
                     let (x, y) = pt.to_f64();
-                    pts.push(self.register_point(x, y));
+                    self.push_point(&mut pts, x, y);
                 }
                 _ => {}
             }
@@ -562,7 +569,42 @@ impl AppState {
         self.constraints_enabled = false;
         self.sketch = Sketch::new();
         self.entity_points.clear();
+        self.pending_snap_links.clear();
         self.command_log.push("Parametric off — constraints cleared".to_string());
+    }
+
+    /// Turn the snap-to-endpoint picks recorded during a draw into Coincident
+    /// constraints: for each, link the newly-created entity's point at that
+    /// location to the existing point it snapped onto. Connection by intent — only
+    /// runs for points the user deliberately snapped (Stage 3). The constraint
+    /// survives the per-edit rebuild via the normal constraint remap.
+    pub(crate) fn materialize_snap_links(&mut self, new_ids: &[EntityId]) {
+        let tol = 1e-6;
+        let links = std::mem::take(&mut self.pending_snap_links);
+        for (px, py, target) in links {
+            let new_pt = self.find_entity_point_at(new_ids, px, py, tol);
+            let existing_pt = self.find_entity_point_at(std::slice::from_ref(&target), px, py, tol);
+            if let (Some(a), Some(b)) = (new_pt, existing_pt) {
+                if a != b {
+                    self.sketch.add_constraint(Constraint::Coincident(a, b));
+                }
+            }
+        }
+    }
+
+    /// First registered point of any of `ids` lying within `tol` of (px, py).
+    fn find_entity_point_at(&self, ids: &[EntityId], px: f64, py: f64, tol: f64) -> Option<PointId> {
+        for id in ids {
+            if let Some(pts) = self.entity_points.get(id) {
+                for &pt in pts {
+                    let (x, y) = self.sketch.point(pt);
+                    if (x - px).hypot(y - py) < tol {
+                        return Some(pt);
+                    }
+                }
+            }
+        }
+        None
     }
 
     pub fn remove_constraint(&mut self, index: usize) {

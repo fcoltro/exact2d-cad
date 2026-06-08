@@ -1,7 +1,8 @@
 # Constraint System Refactor — Plan
 
-**Status:** Stages 0–1 done · Stage 2 next · **Decided:** toggle model, discard-on-exit
-(Option A), 3-point arc model for v1, constraints not persisted to file.
+**Status:** Stages 0–3 done · solver quality (Stage 5) or incremental maintenance next ·
+**Decided:** toggle model, discard-on-exit (Option A), 3-point arc model for v1, constraints
+not persisted to file.
 
 ## Why
 
@@ -45,10 +46,27 @@ Under Option A, constraints never outlive a session, so they are **not** persist
   later cleanup. The **per-edit rebuild** of the sketch (`sync_sketch_from_document` after each
   edit while active) is intentionally kept for now; removing it is coupled to Stage 2's
   incremental maintenance.
-- **Stage 2 — In-session incremental maintenance + kill positional dedup.** New entities/edits
-  update the session in place; delete `register_point`'s proximity merge.
-- **Stage 3 — Coincidence as shared points.** `merge_points(a,b)` triggered only by intent
-  (explicit Coincident, snap-to-endpoint at draw time, shared polyline vertices).
+- **Stage 2 — Kill positional dedup (welding fix). ✅ DONE.** Replaced the global 1e-4
+  `register_point` proximity dedup with a per-entity `push_point`: it shares only with points
+  already registered for the *same* entity (polyline joints, full-circle start==end collapse),
+  so independent geometry that merely touches stays distinct. The
+  `stage0_independent_…_stay_independent` marker was un-ignored and now passes. *Deferred:* true
+  incremental maintenance (new entities/edits updating the overlay in place). The full
+  rebuild-on-edit (`sync_sketch_from_document`) is retained — it's now safe because per-entity
+  registration is deterministic, so the constraint remap is stable. Fold incremental into a
+  later pass if perf/robustness needs it.
+- **Stage 3 — Coincidence by intent. ✅ DONE.** Re-scoped after finding Stage 2 already made
+  *explicit* Coincident work robustly (a constraint that survives the rebuild). True shared-id
+  merges turned out to be coupled to the deferred incremental maintenance + `History` changes
+  (fragile in the current rebuild architecture), so instead of `merge_points` we capture the
+  one genuinely-missing piece: **snap-to-endpoint while drawing**. In parametric mode, when a
+  draw click resolves via an Endpoint/Node snap onto an existing entity, the new geometry's
+  point is linked to the snapped-to point with a **Coincident constraint** (recorded as a
+  pending link per click, materialized on entity Create). It connects by *intent* only (snap),
+  never by proximity, and survives the per-edit rebuild via the normal constraint remap.
+  *Deferred:* true shared-id merges (an optimization; revisit after incremental maintenance);
+  connections drawn in *free* mode aren't captured (re-entering parametric rebuilds from
+  geometry).
 - **Stage 4 — Clean up `add_constraint`.** Replace the 230-line positional mega-match with one
   tested operand-resolution helper.
 - **Stage 5 — (later) Solver quality.** Analytic Jacobian, adaptive Levenberg–Marquardt, QR

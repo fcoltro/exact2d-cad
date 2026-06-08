@@ -1,6 +1,6 @@
 # Constraint System Refactor — Plan
 
-**Status:** Stages 0–3 done · solver quality (Stage 5) or incremental maintenance next ·
+**Status:** Stages 0–3 done · Stage 5 first pass done (adaptive LM + diagnostics) ·
 **Decided:** toggle model, discard-on-exit (Option A), 3-point arc model for v1, constraints
 not persisted to file.
 
@@ -69,8 +69,16 @@ Under Option A, constraints never outlive a session, so they are **not** persist
   geometry).
 - **Stage 4 — Clean up `add_constraint`.** Replace the 230-line positional mega-match with one
   tested operand-resolution helper.
-- **Stage 5 — (later) Solver quality.** Analytic Jacobian, adaptive Levenberg–Marquardt, QR
-  least-squares, per-constraint conflict diagnostics. Independent; any time after Stage 1.
+- **Stage 5 — Solver quality. ✅ FIRST PASS DONE.** (1) `Sketch::solve` rewritten as **adaptive
+  Levenberg–Marquardt** — accept a step only if it lowers the residual, shrink λ toward
+  Gauss–Newton on success / grow it on failure; removed the fixed λ + "take the full step
+  anyway" hack (which could diverge). λ-damping also keeps the normal equations solvable under
+  gauge freedom. (2) `Sketch::diagnose() -> SketchDiagnostics { dof, status, redundant }` —
+  Gram–Schmidt over the Jacobian rows flags exactly which constraints are redundant; surfaced
+  in the constraints panel (status line + redundant rows shown in red). *Deferred:* analytic
+  Jacobian (FD works and is correct for the fiddly Angle/Tangent residuals; analytic is a perf
+  optimization with the most bug-risk) and QR least-squares (normal equations + LM damping is
+  fine for these small systems).
 - **Stage 6 — (future) Exact-kernel reconnection.** Recover exact coordinates for the subset
   pinned by exact linear constraints after a numeric solve.
 

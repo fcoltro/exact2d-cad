@@ -1554,17 +1554,23 @@ fn constraints_panel(ctx: &Context, app: &mut AppState) {
             ui.heading("Constraints Solver");
             ui.separator();
             
-            // DOF & Status
-            let dof = app.sketch.degrees_of_freedom();
-            ui.label(format!("Degrees of Freedom: {}", dof));
-            
-            let is_over = app.sketch.is_over_constrained();
-            if is_over {
-                ui.colored_label(Color32::from_rgb(255, 100, 100), "⚠ OVER-CONSTRAINED!");
-            } else if dof == 0 {
-                ui.colored_label(Color32::from_rgb(0, 220, 100), "✓ Fully Constrained");
-            } else {
-                ui.colored_label(Color32::from_rgb(200, 200, 100), "ℹ Under-constrained");
+            // DOF & status, plus which constraints are redundant — one diagnosis.
+            let diag = app.sketch.diagnose();
+            ui.label(format!("Degrees of Freedom: {}", diag.dof));
+
+            match diag.status {
+                exact2d_constraint::ConstraintStatus::OverConstrained => {
+                    ui.colored_label(Color32::from_rgb(255, 100, 100), "⚠ OVER-CONSTRAINED");
+                    ui.colored_label(Color32::from_rgb(255, 100, 100),
+                        format!("{} redundant — shown in red", diag.redundant.len()));
+                }
+                exact2d_constraint::ConstraintStatus::WellConstrained => {
+                    ui.colored_label(Color32::from_rgb(0, 220, 100), "✓ Fully Constrained");
+                }
+                exact2d_constraint::ConstraintStatus::UnderConstrained { dof } => {
+                    ui.colored_label(Color32::from_rgb(200, 200, 100),
+                        format!("ℹ Under-constrained ({dof} DOF)"));
+                }
             }
             
             ui.separator();
@@ -1595,7 +1601,11 @@ fn constraints_panel(ctx: &Context, app: &mut AppState) {
                             exact2d_constraint::Constraint::TangentCircleCircle(c1, s1, c2, s2, ext) => format!("Tangent(C{}—S{}, C{}—S{}, {})", c1, s1, c2, s2, if *ext { "Ext" } else { "Int" }),
                         };
                         ui.horizontal(|ui| {
-                            ui.label(&label);
+                            if diag.redundant.contains(&idx) {
+                                ui.colored_label(Color32::from_rgb(255, 100, 100), format!("⚠ {label}"));
+                            } else {
+                                ui.label(&label);
+                            }
                             if ui.small_button("x").clicked() {
                                 to_remove = Some(idx);
                             }

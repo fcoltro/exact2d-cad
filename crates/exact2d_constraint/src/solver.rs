@@ -25,6 +25,28 @@ pub enum SolveStatus {
     DidNotConverge { iterations: u32, residual: f64 },
 }
 
+/// Overall constrained-ness of a sketch (as shown in parametric CAD UIs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConstraintStatus {
+    /// rank == 2·points and no redundancy: a unique solution.
+    WellConstrained,
+    /// Fewer independent equations than DOF: still movable.
+    UnderConstrained { dof: usize },
+    /// Redundant (and possibly conflicting) constraints present.
+    OverConstrained,
+}
+
+/// A diagnosis of the sketch's constraint system, for surfacing in the UI.
+#[derive(Clone, Debug)]
+pub struct SketchDiagnostics {
+    /// Remaining degrees of freedom = 2·points − rank(Jacobian).
+    pub dof: usize,
+    pub status: ConstraintStatus,
+    /// Indices of constraints whose equations are linearly dependent on the others
+    /// (redundant) — the ones a user could remove to relieve over-constraining.
+    pub redundant: Vec<usize>,
+}
+
 impl Sketch {
     pub fn new() -> Self { Sketch::default() }
 
@@ -93,53 +115,68 @@ impl Sketch {
         j
     }
 
-    /// Solve the constraint system in place. Gauss–Newton with normal equations.
+    /// Solve the constraint system in place by **adaptive Levenberg–Marquardt**:
+    /// solve `(JᵀJ + λI) δ = −Jᵀf`, accept the step only if it reduces the residual
+    /// norm, and adapt λ — shrink it toward Gauss–Newton on success (fast quadratic
+    /// convergence near the solution), grow it toward gradient descent on failure
+    /// (a guaranteed-descent direction). This replaces the old fixed λ plus the
+    /// "take the full step anyway" hack, which could diverge. λ-damping also keeps
+    /// the normal equations solvable under gauge freedom (rank-deficient JᵀJ).
     pub fn solve(&mut self, max_iters: u32, tol: f64) -> SolveStatus {
         let mut vars = self.vars.clone();
-        let mut last_residual = f64::INFINITY;
+        let n = vars.len();
+        let mut f = self.residual_vector(&vars);
+        let mut cost = norm(&f);
+        let mut lambda = 1e-3;
+        let mut iters = 0;
 
-        for iter in 0..max_iters {
-            let f = self.residual_vector(&vars);
-            let residual_norm = norm(&f);
-            last_residual = residual_norm;
-            if residual_norm < tol {
+        while iters < max_iters {
+            if cost < tol {
                 self.vars = vars;
-                return SolveStatus::Converged { iterations: iter, residual: residual_norm };
+                return SolveStatus::Converged { iterations: iters, residual: cost };
             }
+            iters += 1;
 
             let j = self.jacobian(&vars);
-            // Solve (JᵀJ + λI) δ = −Jᵀf  (Levenberg-style damping for robustness).
-            let n = vars.len();
             let jt_j = mat_ata(&j, n);
             let jt_f = mat_atb(&j, &f, n);
-            let lambda = 1e-9;
-            let mut a = jt_j;
-            for i in 0..n { a[i][i] += lambda; }
-            let rhs: Vec<f64> = jt_f.iter().map(|v| -v).collect();
 
-            match solve_linear(a, rhs) {
-                Some(delta) => {
-                    // Damped step with simple backtracking line search.
-                    let mut step = 1.0;
-                    let mut applied = false;
-                    for _ in 0..20 {
-                        let trial: Vec<f64> = vars.iter().zip(&delta).map(|(v, d)| v + step * d).collect();
-                        if norm(&self.residual_vector(&trial)) < residual_norm {
-                            vars = trial; applied = true; break;
-                        }
-                        step *= 0.5;
-                    }
-                    if !applied {
-                        // No decrease found — take the full step anyway to escape flats.
-                        for (v, d) in vars.iter_mut().zip(&delta) { *v += d; }
+            // Grow λ until a damped step actually reduces the cost (or give up).
+            let mut accepted = false;
+            for _ in 0..40 {
+                let mut a = jt_j.clone();
+                for i in 0..n { a[i][i] += lambda; }
+                let rhs: Vec<f64> = jt_f.iter().map(|v| -v).collect();
+
+                if let Some(delta) = solve_linear(a, rhs) {
+                    let trial: Vec<f64> = vars.iter().zip(&delta).map(|(v, d)| v + d).collect();
+                    let trial_f = self.residual_vector(&trial);
+                    let trial_cost = norm(&trial_f);
+                    if trial_cost < cost {
+                        vars = trial;
+                        f = trial_f;
+                        cost = trial_cost;
+                        lambda = (lambda * 0.5).max(1e-12); // trust the model more
+                        accepted = true;
+                        break;
                     }
                 }
-                None => break, // singular system
+                lambda = (lambda * 4.0).min(1e12); // step rejected: damp harder
+            }
+
+            if !accepted {
+                // No downhill step exists at any damping — a local min (often a
+                // conflicting/over-constrained system). Stop.
+                break;
             }
         }
 
         self.vars = vars;
-        SolveStatus::DidNotConverge { iterations: max_iters, residual: last_residual }
+        if cost < tol {
+            SolveStatus::Converged { iterations: iters, residual: cost }
+        } else {
+            SolveStatus::DidNotConverge { iterations: iters, residual: cost }
+        }
     }
 
     /// Remaining degrees of freedom = 2·points − rank(Jacobian).
@@ -158,12 +195,77 @@ impl Sketch {
         let j = self.jacobian(&self.vars);
         numerical_rank(&j) < self.equation_count()
     }
+
+    /// Diagnose the constraint system: DOF, overall status, and which constraints
+    /// are redundant. Redundancy is found by adding each constraint's Jacobian rows
+    /// to an orthogonal basis (Gram–Schmidt); a constraint whose rows add no rank is
+    /// linearly dependent on the others and flagged as redundant.
+    pub fn diagnose(&self) -> SketchDiagnostics {
+        let total = self.vars.len();
+        if self.constraints.is_empty() {
+            return SketchDiagnostics {
+                dof: total,
+                status: ConstraintStatus::UnderConstrained { dof: total },
+                redundant: Vec::new(),
+            };
+        }
+
+        let j = self.jacobian(&self.vars);
+        let mut basis: Vec<Vec<f64>> = Vec::new();
+        let mut redundant = Vec::new();
+        let mut row = 0;
+        for (ci, c) in self.constraints.iter().enumerate() {
+            let k = c.equation_count();
+            let mut any_independent = false;
+            for r in row..(row + k) {
+                if r < j.len() && add_to_basis(&mut basis, j[r].clone()) {
+                    any_independent = true;
+                }
+            }
+            if !any_independent {
+                redundant.push(ci);
+            }
+            row += k;
+        }
+
+        let rank = basis.len();
+        let dof = total.saturating_sub(rank);
+        let status = if !redundant.is_empty() {
+            ConstraintStatus::OverConstrained
+        } else if dof > 0 {
+            ConstraintStatus::UnderConstrained { dof }
+        } else {
+            ConstraintStatus::WellConstrained
+        };
+        SketchDiagnostics { dof, status, redundant }
+    }
 }
 
 // ── Small dense linear algebra ────────────────────────────────────────────────
 
 fn norm(v: &[f64]) -> f64 {
     v.iter().map(|x| x * x).sum::<f64>().sqrt()
+}
+
+/// Try to add `row` to an orthogonal `basis` (Gram–Schmidt). Returns true if the
+/// row was linearly independent (and was added, normalized); false if it lies in
+/// the span of the existing basis (i.e. it's redundant).
+fn add_to_basis(basis: &mut Vec<Vec<f64>>, mut row: Vec<f64>) -> bool {
+    let tol = 1e-9;
+    for b in basis.iter() {
+        let dot: f64 = row.iter().zip(b).map(|(r, bb)| r * bb).sum();
+        for (r, bb) in row.iter_mut().zip(b) {
+            *r -= dot * bb; // basis vectors are unit-norm, so projection = dot·b
+        }
+    }
+    let resid = norm(&row);
+    if resid > tol {
+        for r in row.iter_mut() { *r /= resid; }
+        basis.push(row);
+        true
+    } else {
+        false
+    }
 }
 
 /// AᵀA for an m×n matrix A → n×n.
@@ -356,6 +458,61 @@ mod tests {
         assert!(matches!(status, SolveStatus::Converged { .. }));
         let (_bx, by) = s.point(b);
         assert!(by.abs() < 1e-6, "horizontal → by≈0, got {}", by);
+    }
+
+    #[test]
+    fn diagnose_well_constrained() {
+        let mut s = Sketch::new();
+        let a = s.add_point(0.0, 0.0);
+        let b = s.add_point(1.0, 0.0);
+        let c = s.add_point(0.0, 1.0);
+        s.add_constraint(Constraint::Fix(a, 0.0, 0.0));
+        s.add_constraint(Constraint::Fix(b, 1.0, 0.0));
+        s.add_constraint(Constraint::Fix(c, 0.0, 1.0));
+        let d = s.diagnose();
+        assert_eq!(d.dof, 0);
+        assert_eq!(d.status, ConstraintStatus::WellConstrained);
+        assert!(d.redundant.is_empty());
+    }
+
+    #[test]
+    fn diagnose_under_constrained() {
+        let mut s = Sketch::new();
+        let a = s.add_point(0.0, 0.0);
+        let _b = s.add_point(3.0, 4.0);
+        s.add_constraint(Constraint::Fix(a, 0.0, 0.0));
+        let d = s.diagnose();
+        assert_eq!(d.dof, 2);
+        assert_eq!(d.status, ConstraintStatus::UnderConstrained { dof: 2 });
+        assert!(d.redundant.is_empty());
+    }
+
+    #[test]
+    fn diagnose_flags_redundant_constraint() {
+        let mut s = Sketch::new();
+        let a = s.add_point(0.0, 0.0);
+        s.add_constraint(Constraint::Fix(a, 0.0, 0.0));
+        s.add_constraint(Constraint::Fix(a, 0.0, 0.0)); // redundant duplicate
+        let d = s.diagnose();
+        assert_eq!(d.status, ConstraintStatus::OverConstrained);
+        assert_eq!(d.redundant, vec![1], "the second Fix is the redundant one");
+    }
+
+    #[test]
+    fn adaptive_lm_converges_on_distance_chain() {
+        // A small chain that needs several LM steps: fix a, b on a circle of radius 5
+        // from a, and horizontal — should pull b to (5,0) robustly.
+        let mut s = Sketch::new();
+        let a = s.add_point(0.0, 0.0);
+        let b = s.add_point(0.2, 4.9); // poor initial guess
+        s.add_constraint(Constraint::Fix(a, 0.0, 0.0));
+        s.add_constraint(Constraint::Horizontal(a, b));
+        s.add_constraint(Constraint::Distance(a, b, 5.0));
+        let status = s.solve(200, 1e-10);
+        assert!(matches!(status, SolveStatus::Converged { .. }), "status={status:?}");
+        let (bx, by) = s.point(b);
+        assert!((bx.abs() - 5.0).abs() < 1e-5, "bx={bx}");
+        assert!(by.abs() < 1e-5, "by={by}");
     }
 
     #[test]

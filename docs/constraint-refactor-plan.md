@@ -1,8 +1,8 @@
 # Constraint System Refactor — Plan
 
-**Status:** Stages 0–3 done · Stage 5 first pass done (adaptive LM + diagnostics) ·
-**Decided:** toggle model, discard-on-exit (Option A), 3-point arc model for v1, constraints
-not persisted to file.
+**Status:** Stages 0–3 done · Stage 5 done (adaptive LM + diagnostics + hybrid analytic
+Jacobian) · **Decided:** toggle model, discard-on-exit (Option A), 3-point arc model for v1,
+constraints not persisted to file.
 
 ## Why
 
@@ -75,10 +75,13 @@ Under Option A, constraints never outlive a session, so they are **not** persist
   anyway" hack (which could diverge). λ-damping also keeps the normal equations solvable under
   gauge freedom. (2) `Sketch::diagnose() -> SketchDiagnostics { dof, status, redundant }` —
   Gram–Schmidt over the Jacobian rows flags exactly which constraints are redundant; surfaced
-  in the constraints panel (status line + redundant rows shown in red). *Deferred:* analytic
-  Jacobian (FD works and is correct for the fiddly Angle/Tangent residuals; analytic is a perf
-  optimization with the most bug-risk) and QR least-squares (normal equations + LM damping is
-  fine for these small systems).
+  in the constraints panel (status line + redundant rows shown in red). (3) **Hybrid analytic
+  Jacobian**: `Constraint::jacobian` returns exact sparse gradient rows for the common
+  linear/quadratic constraints (Coincident/Fix/H/V/Parallel/Perp/Collinear/EqualLength/Distance/
+  DistanceX/Y/Midpoint); `Sketch::jacobian` uses them where available and finite-differences the
+  rest (Symmetric/Angle/Tangent*). A test asserts the analytic rows match finite differences, so
+  the hand-derived gradients are self-checking. *Deferred:* analytic gradients for the four FD-only
+  constraints, and QR least-squares (normal equations + LM damping is fine for these small systems).
 - **Stage 6 — (future) Exact-kernel reconnection.** Recover exact coordinates for the subset
   pinned by exact linear constraints after a numeric solve.
 

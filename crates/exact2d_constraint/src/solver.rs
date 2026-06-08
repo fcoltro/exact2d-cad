@@ -95,22 +95,43 @@ impl Sketch {
         f
     }
 
-    /// Finite-difference Jacobian: J[i][j] = ∂f_i/∂var_j.
+    /// Jacobian J[i][j] = ∂f_i/∂var_j. Hybrid: each constraint supplies analytic
+    /// rows where it can (`Constraint::jacobian`), and the rest are filled by
+    /// finite differences per-constraint. Analytic gradients are exact and cheaper
+    /// (no extra residual evaluations), which also sharpens the rank/redundancy
+    /// diagnostics.
     fn jacobian(&self, vars: &[f64]) -> Vec<Vec<f64>> {
         let n = vars.len();
-        let f0 = self.residual_vector(vars);
-        let m = f0.len();
+        let m = self.equation_count();
         let mut j = vec![vec![0.0; n]; m];
         let h = 1e-7;
-        let mut perturbed = vars.to_vec();
-        for col in 0..n {
-            let orig = perturbed[col];
-            perturbed[col] = orig + h;
-            let f1 = self.residual_vector(&perturbed);
-            perturbed[col] = orig;
-            for row in 0..m {
-                j[row][col] = (f1[row] - f0[row]) / h;
+        let mut row = 0;
+        for c in &self.constraints {
+            let k = c.equation_count();
+            match c.jacobian(vars) {
+                Some(rows) => {
+                    for (i, entries) in rows.iter().enumerate() {
+                        for &(col, val) in entries {
+                            j[row + i][col] = val;
+                        }
+                    }
+                }
+                None => {
+                    // Finite-difference just this constraint's residual rows.
+                    let f0 = c.residuals(vars);
+                    let mut perturbed = vars.to_vec();
+                    for col in 0..n {
+                        let orig = perturbed[col];
+                        perturbed[col] = orig + h;
+                        let f1 = c.residuals(&perturbed);
+                        perturbed[col] = orig;
+                        for i in 0..k {
+                            j[row + i][col] = (f1[i] - f0[i]) / h;
+                        }
+                    }
+                }
             }
+            row += k;
         }
         j
     }
@@ -458,6 +479,53 @@ mod tests {
         assert!(matches!(status, SolveStatus::Converged { .. }));
         let (_bx, by) = s.point(b);
         assert!(by.abs() < 1e-6, "horizontal → by≈0, got {}", by);
+    }
+
+    #[test]
+    fn analytic_jacobian_matches_finite_difference() {
+        // Representative sketch exercising every analytically-differentiated
+        // constraint (plus FD-only ones, which match trivially). Points are at
+        // generic, non-degenerate positions.
+        let mut s = Sketch::new();
+        let a = s.add_point(0.3, 1.1);
+        let b = s.add_point(2.7, 0.4);
+        let c = s.add_point(1.2, 3.3);
+        let d = s.add_point(4.1, 2.2);
+        let e = s.add_point(0.9, 5.0);
+        s.add_constraint(Constraint::Fix(a, 0.3, 1.1));
+        s.add_constraint(Constraint::Coincident(a, b));
+        s.add_constraint(Constraint::Horizontal(a, b));
+        s.add_constraint(Constraint::Vertical(c, d));
+        s.add_constraint(Constraint::Parallel((a, b), (c, d)));
+        s.add_constraint(Constraint::Perpendicular((a, b), (c, e)));
+        s.add_constraint(Constraint::Collinear(a, c, e));
+        s.add_constraint(Constraint::EqualLength((a, b), (c, d)));
+        s.add_constraint(Constraint::Distance(a, b, 2.0));
+        s.add_constraint(Constraint::DistanceX(b, c, 1.0));
+        s.add_constraint(Constraint::DistanceY(c, d, 1.0));
+        s.add_constraint(Constraint::Midpoint(e, a, b));
+        s.add_constraint(Constraint::Angle((a, b), (c, d), 0.5)); // FD-only
+
+        let vars = s.vars.clone();
+        let analytic = s.jacobian(&vars);
+
+        // Independent full finite-difference reference.
+        let f0 = s.residual_vector(&vars);
+        let (m, n) = (f0.len(), vars.len());
+        let h = 1e-7;
+        let mut pert = vars.clone();
+        for col in 0..n {
+            let o = pert[col];
+            pert[col] = o + h;
+            let f1 = s.residual_vector(&pert);
+            pert[col] = o;
+            for r in 0..m {
+                let fd = (f1[r] - f0[r]) / h;
+                assert!((analytic[r][col] - fd).abs() < 1e-4,
+                    "Jacobian mismatch at row {r}, col {col}: analytic={}, fd={}",
+                    analytic[r][col], fd);
+            }
+        }
     }
 
     #[test]

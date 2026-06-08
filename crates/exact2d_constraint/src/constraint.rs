@@ -166,4 +166,91 @@ impl Constraint {
             }
         }
     }
+
+    /// Analytic Jacobian rows: one inner `Vec` per residual equation, each a list
+    /// of `(variable_index, ∂residual/∂variable)` sparse entries (variable index of
+    /// point `p` is `2p` for x, `2p+1` for y). Returns `None` for constraints whose
+    /// derivatives are deliberately left to finite differences (Symmetric, Angle,
+    /// Tangent*) — their closed forms are fiddly and low-value. The solver assembles
+    /// analytic rows where available and finite-differences the rest.
+    pub fn jacobian(&self, vars: &[f64]) -> Option<Vec<Vec<(usize, f64)>>> {
+        let x = |p: PointId| vars[2 * p];
+        let y = |p: PointId| vars[2 * p + 1];
+        let xi = |p: PointId| 2 * p;
+        let yi = |p: PointId| 2 * p + 1;
+        let dir = |(a, b): LineRef| (x(b) - x(a), y(b) - y(a));
+
+        Some(match *self {
+            Constraint::Coincident(p1, p2) => vec![
+                vec![(xi(p1), 1.0), (xi(p2), -1.0)],
+                vec![(yi(p1), 1.0), (yi(p2), -1.0)],
+            ],
+            Constraint::Fix(p, _, _) => vec![
+                vec![(xi(p), 1.0)],
+                vec![(yi(p), 1.0)],
+            ],
+            Constraint::Horizontal(p1, p2) =>
+                vec![vec![(yi(p1), 1.0), (yi(p2), -1.0)]],
+            Constraint::Vertical(p1, p2) =>
+                vec![vec![(xi(p1), 1.0), (xi(p2), -1.0)]],
+
+            Constraint::Parallel(l1, l2) => {
+                let (ux, uy) = dir(l1);
+                let (vx, vy) = dir(l2);
+                vec![vec![
+                    (xi(l1.0), -vy), (yi(l1.0), vx), (xi(l1.1), vy), (yi(l1.1), -vx),
+                    (xi(l2.0), uy), (yi(l2.0), -ux), (xi(l2.1), -uy), (yi(l2.1), ux),
+                ]]
+            }
+            Constraint::Perpendicular(l1, l2) => {
+                let (ux, uy) = dir(l1);
+                let (vx, vy) = dir(l2);
+                vec![vec![
+                    (xi(l1.0), -vx), (yi(l1.0), -vy), (xi(l1.1), vx), (yi(l1.1), vy),
+                    (xi(l2.0), -ux), (yi(l2.0), -uy), (xi(l2.1), ux), (yi(l2.1), uy),
+                ]]
+            }
+            Constraint::Collinear(p1, p2, p3) => {
+                let ux = x(p2) - x(p1); let uy = y(p2) - y(p1);
+                let vx = x(p3) - x(p1); let vy = y(p3) - y(p1);
+                vec![vec![
+                    (xi(p1), uy - vy), (yi(p1), vx - ux),
+                    (xi(p2), vy), (yi(p2), -vx),
+                    (xi(p3), -uy), (yi(p3), ux),
+                ]]
+            }
+            Constraint::EqualLength(l1, l2) => {
+                let (ux, uy) = dir(l1);
+                let (vx, vy) = dir(l2);
+                vec![vec![
+                    (xi(l1.0), -2.0 * ux), (yi(l1.0), -2.0 * uy), (xi(l1.1), 2.0 * ux), (yi(l1.1), 2.0 * uy),
+                    (xi(l2.0), 2.0 * vx), (yi(l2.0), 2.0 * vy), (xi(l2.1), -2.0 * vx), (yi(l2.1), -2.0 * vy),
+                ]]
+            }
+            Constraint::Distance(p1, p2, _) => {
+                let dx = x(p2) - x(p1); let dy = y(p2) - y(p1);
+                vec![vec![
+                    (xi(p1), -2.0 * dx), (yi(p1), -2.0 * dy), (xi(p2), 2.0 * dx), (yi(p2), 2.0 * dy),
+                ]]
+            }
+            Constraint::DistanceX(p1, p2, _) => {
+                let s = if x(p2) - x(p1) >= 0.0 { 1.0 } else { -1.0 };
+                vec![vec![(xi(p1), -s), (xi(p2), s)]]
+            }
+            Constraint::DistanceY(p1, p2, _) => {
+                let s = if y(p2) - y(p1) >= 0.0 { 1.0 } else { -1.0 };
+                vec![vec![(yi(p1), -s), (yi(p2), s)]]
+            }
+            Constraint::Midpoint(m, a, b) => vec![
+                vec![(xi(m), 2.0), (xi(a), -1.0), (xi(b), -1.0)],
+                vec![(yi(m), 2.0), (yi(a), -1.0), (yi(b), -1.0)],
+            ],
+
+            // Derivatives left to finite differences (fiddly closed forms).
+            Constraint::Symmetric(..)
+            | Constraint::Angle(..)
+            | Constraint::TangentLineCircle(..)
+            | Constraint::TangentCircleCircle(..) => return None,
+        })
+    }
 }

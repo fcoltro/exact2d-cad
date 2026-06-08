@@ -14,10 +14,7 @@ use super::AppState;
 impl AppState {
     /// Build solver constraints from the current selection per the requested type.
     pub(crate) fn add_constraint(&mut self, ctype: ConstraintType) {
-                if !self.constraints_enabled {
-                    self.constraints_enabled = true;
-                    self.sync_sketch_from_document();
-                }
+                self.enter_parametric(); // builds the overlay if not already active
                 self.history.snapshot(&self.document, &self.sketch, &self.entity_points);
 
                 // Collect points, lines, and arcs from the current selection
@@ -534,6 +531,38 @@ impl AppState {
         } else {
             SolveStatus::Converged { iterations: 0, residual: 0.0 }
         }
+    }
+
+    // ── Parametric mode lifecycle (Stage 1) ────────────────────────────────────
+    // The parametric sketch is an ephemeral overlay on the exact document, which is
+    // always the single source of truth. The overlay exists only while parametric
+    // mode is ON. See docs/constraint-refactor-plan.md.
+    //
+    // NOTE: the overlay data (`sketch`, `entity_points`) still lives as fields on
+    // AppState rather than inside an `Option<ParametricSession>`; the type-level
+    // encapsulation is a later cleanup (it would touch ~80 call sites and the
+    // document/sketch split-borrows). `constraints_enabled` is the "session active"
+    // flag, and the overlay is empty whenever it is false.
+
+    /// Enter parametric mode: build the sketch overlay from the current geometry
+    /// (once) and solve. No-op if already active.
+    pub fn enter_parametric(&mut self) {
+        if self.constraints_enabled { return; }
+        self.constraints_enabled = true;
+        self.sync_sketch_from_document(); // build once from current geometry
+        self.solve_constraints();
+    }
+
+    /// Exit parametric mode: discard the sketch/constraint overlay (Option A —
+    /// constraints do not persist). Geometry has already been baked into the
+    /// document by prior solves, so dropping the overlay reverts instantly to free
+    /// drafting without changing any geometry.
+    pub fn exit_parametric(&mut self) {
+        if !self.constraints_enabled { return; }
+        self.constraints_enabled = false;
+        self.sketch = Sketch::new();
+        self.entity_points.clear();
+        self.command_log.push("Parametric off — constraints cleared".to_string());
     }
 
     pub fn remove_constraint(&mut self, index: usize) {

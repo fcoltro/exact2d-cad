@@ -1,7 +1,7 @@
 # Constraint System Refactor — Plan
 
-**Status:** Stage 0 in progress · **Decided:** toggle model, discard-on-exit (Option A),
-3-point arc model for v1, constraints not persisted to file.
+**Status:** Stages 0–1 done · Stage 2 next · **Decided:** toggle model, discard-on-exit
+(Option A), 3-point arc model for v1, constraints not persisted to file.
 
 ## Why
 
@@ -36,10 +36,15 @@ Under Option A, constraints never outlive a session, so they are **not** persist
   redo across a constraint; toggle-off keeps geometry). Plus an `#[ignore]` marker test
   encoding the target "independent endpoints at the same location must stay independent"
   (proves the Stage 3 welding fix).
-- **Stage 1 — `ParametricSession` lifecycle.** Move sketch/entity_points/constraints into an
-  optional session; add `enter_parametric`/`exit_parametric`; stop calling
-  `sync_sketch_from_document` on every edit — build once on enter, bake + drop on exit. Wire to
-  the `CONSTRAINTS` status toggle + `⛓ Parametric` menu item. *Most of the mess disappears here.*
+- **Stage 1 — Parametric lifecycle. ✅ DONE.** Added `enter_parametric`/`exit_parametric`:
+  build the sketch overlay once on enter, **discard it on exit** (Option A), no sketch overlay
+  at startup. All enable paths (`ToggleConstraints`, `CON …`, the Dimension tool) route through
+  them. *Scope note:* the overlay data still lives as `sketch`/`entity_points` fields on
+  AppState gated by `constraints_enabled` — the literal `Option<ParametricSession>` type-level
+  move is deferred (it would touch ~80 call sites + document/sketch split-borrows) and is a
+  later cleanup. The **per-edit rebuild** of the sketch (`sync_sketch_from_document` after each
+  edit while active) is intentionally kept for now; removing it is coupled to Stage 2's
+  incremental maintenance.
 - **Stage 2 — In-session incremental maintenance + kill positional dedup.** New entities/edits
   update the session in place; delete `register_point`'s proximity merge.
 - **Stage 3 — Coincidence as shared points.** `merge_points(a,b)` triggered only by intent

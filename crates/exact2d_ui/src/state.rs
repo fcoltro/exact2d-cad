@@ -60,7 +60,7 @@ impl AppState {
         let mut document = Document::new();
         let origin_id = document.add(EntityKind::Point(Point2d::from_i64(0, 0)));
 
-        let mut app = AppState {
+        let app = AppState {
             document,
             view: ViewTransform::new(canvas_w, canvas_h),
             tool: Tool::Select,
@@ -86,7 +86,9 @@ impl AppState {
 
             current_file_path: None,
         };
-        app.sync_sketch_from_document();
+        // No sketch overlay at startup: parametric mode is OFF by default (free
+        // drafting on the exact document). The overlay is built on demand by
+        // enter_parametric(); see docs/constraint-refactor-plan.md.
         app
     }
 
@@ -176,8 +178,10 @@ impl AppState {
 
         // DIMENSION tool: click points/entities, then click to place.
         if let Tool::Dimension { stage, p1, p2 } = self.tool.clone() {
-            if stage == 0 && (!self.constraints_enabled || self.sketch.num_points() == 0) {
-                self.sync_sketch_from_document();
+            // The dimension tool creates a parametric (dimensional) constraint, so
+            // using it enters parametric mode and builds the sketch overlay.
+            if stage == 0 {
+                self.enter_parametric();
             }
             let px = p.x.to_f64();
             let py = p.y.to_f64();
@@ -219,10 +223,7 @@ impl AppState {
                 }
             } else if stage == 2 {
                 if let (Some(pt1), Some(pt2)) = (p1, p2) {
-                    if !self.constraints_enabled {
-                        self.constraints_enabled = true;
-                        self.sync_sketch_from_document();
-                    }
+                    self.enter_parametric(); // no-op: entered at stage 0
                     self.history.snapshot(&self.document, &self.sketch, &self.entity_points);
                     
                     let (x1, y1) = self.sketch.point(pt1);
@@ -502,10 +503,10 @@ impl AppState {
             Command::LayerSet(name) => { self.document.layers.set_current(&name); }
             Command::LayerNew(name) => { let idx = self.document.layers.add(Layer::new(name)); self.document.layers.current = idx; }
             Command::ToggleConstraints => {
-                self.constraints_enabled = !self.constraints_enabled;
                 if self.constraints_enabled {
-                    self.sync_sketch_from_document();
-                    self.solve_constraints();
+                    self.exit_parametric();
+                } else {
+                    self.enter_parametric();
                 }
             }
             Command::AddConstraint(ctype) => self.add_constraint(ctype),
@@ -1337,5 +1338,66 @@ mod tests {
         let p2 = a.entity_points.get(&l2).cloned().unwrap();
         assert_ne!(p1[0], p2[0],
             "endpoints of unrelated lines at the same location must not be welded");
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Stage 1 — ParametricSession lifecycle (see docs/constraint-refactor-plan.md).
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /// Parametric mode is OFF by default: no sketch overlay exists at startup.
+    #[test]
+    fn stage1_no_sketch_overlay_at_startup() {
+        let a = app();
+        assert!(!a.constraints_enabled);
+        assert_eq!(a.sketch.num_points(), 0, "no sketch points before entering parametric");
+        assert!(a.entity_points.is_empty(), "no overlay map before entering parametric");
+        assert_eq!(a.sketch.constraints().len(), 0);
+    }
+
+    /// Exiting parametric discards the overlay (Option A) but keeps the geometry,
+    /// and re-entering rebuilds a fresh overlay from the current document.
+    #[test]
+    fn stage1_exit_discards_overlay_keeps_geometry_reenter_rebuilds() {
+        let mut a = app();
+        let id = a.add_entity(EntityKind::Curve(Curve::Line(LineSeg::from_endpoints(pt(0,0), pt(3,4)))));
+        a.selection = vec![id];
+        a.run_command("CON H"); // enter parametric + horizontal
+        assert!(a.constraints_enabled);
+        assert!(!a.entity_points.is_empty());
+
+        let geom = |a: &AppState| -> ((f64,f64),(f64,f64)) {
+            if let Some(EntityKind::Curve(Curve::Line(l))) = a.document.get(id).map(|e| &e.kind) {
+                (l.p0.to_f64(), l.p1.to_f64())
+            } else { panic!("expected line"); }
+        };
+        let before = geom(&a);
+
+        // Exit: overlay dropped, geometry untouched.
+        a.run_command("CONSTRAINTS");
+        assert!(!a.constraints_enabled);
+        assert_eq!(a.sketch.num_points(), 0, "sketch dropped on exit");
+        assert_eq!(a.sketch.constraints().len(), 0, "constraints discarded on exit");
+        assert!(a.entity_points.is_empty(), "overlay map dropped on exit");
+        assert_eq!(geom(&a), before, "geometry must survive exit unchanged");
+
+        // Re-enter: a fresh overlay is built from current geometry.
+        a.run_command("CONSTRAINTS");
+        assert!(a.constraints_enabled);
+        assert!(!a.entity_points.is_empty(), "re-entering rebuilds the overlay");
+        assert!(a.entity_points.contains_key(&id), "the line is registered again");
+    }
+
+    /// The dimension tool enters parametric mode on first use (dimensions are
+    /// dimensional constraints in this app).
+    #[test]
+    fn stage1_dimension_tool_enters_parametric() {
+        let mut a = app();
+        let _l = a.add_entity(EntityKind::Curve(Curve::Line(LineSeg::from_endpoints(pt(0,0), pt(10,0)))));
+        assert!(!a.constraints_enabled);
+        a.tool = Tool::Dimension { stage: 0, p1: None, p2: None };
+        let (sx, sy) = a.view.world_to_screen(5.0, 0.1);
+        a.pointer_moved(sx, sy);
+        a.canvas_click(sx, sy); // stage 0 pick → enters parametric
+        assert!(a.constraints_enabled, "using the dimension tool enters parametric mode");
     }
 }

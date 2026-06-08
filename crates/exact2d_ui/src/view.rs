@@ -1764,7 +1764,77 @@ fn draw_entity(painter: &egui::Painter, app: &AppState, e: &exact2d_document::En
             painter.text(to_screen(x, y), egui::Align2::LEFT_BOTTOM, content,
                 egui::FontId::proportional(*height as f32 * app.view.zoom as f32), stroke.color);
         }
+        EntityKind::Dimension(d) => draw_dimension(painter, app, d, &to_screen, stroke.color),
         _ => {}
+    }
+}
+
+/// Draw a dimension annotation: extension lines, dimension line, arrowheads, and
+/// the measured-value text, per its `DimStyle`.
+fn draw_dimension(
+    painter: &egui::Painter,
+    app: &AppState,
+    dim: &exact2d_document::Dimension,
+    to_screen: &impl Fn(f64, f64) -> egui::Pos2,
+    color: Color32,
+) {
+    use exact2d_document::{DimKind, LinearOrient};
+    let style = app.document.dim_styles.get(dim.style);
+    let stroke = Stroke::new(1.0, color);
+    let font = egui::FontId::proportional((style.text_height * app.view.zoom).max(8.0) as f32);
+    let text = dim.display_text(style);
+
+    let arrow = |tip: egui::Pos2, toward: egui::Pos2| {
+        let d = toward - tip;
+        let len = d.length();
+        if len > 1e-3 { draw_arrowhead_points(painter, tip, d / len, color); }
+    };
+
+    match &dim.kind {
+        DimKind::Linear { p1, p2, line_point, orientation } => {
+            let (x1, y1) = p1.to_f64();
+            let (x2, y2) = p2.to_f64();
+            let (lx, ly) = line_point.to_f64();
+            let (o1, o2, tpos, talign) = match orientation {
+                LinearOrient::Horizontal =>
+                    ((x1, ly), (x2, ly), ((x1 + x2) / 2.0, ly), egui::Align2::CENTER_BOTTOM),
+                LinearOrient::Vertical =>
+                    ((lx, y1), (lx, y2), (lx, (y1 + y2) / 2.0), egui::Align2::RIGHT_CENTER),
+                LinearOrient::Aligned => {
+                    let (dx, dy) = (x2 - x1, y2 - y1);
+                    let len = (dx * dx + dy * dy).sqrt().max(1e-9);
+                    let (nx, ny) = (-dy / len, dx / len);
+                    let off = (lx - x1) * nx + (ly - y1) * ny;
+                    ((x1 + nx * off, y1 + ny * off), (x2 + nx * off, y2 + ny * off),
+                     ((x1 + x2) / 2.0 + nx * off, (y1 + y2) / 2.0 + ny * off), egui::Align2::CENTER_CENTER)
+                }
+            };
+            let s1 = to_screen(o1.0, o1.1);
+            let s2 = to_screen(o2.0, o2.1);
+            painter.line_segment([to_screen(x1, y1), s1], stroke); // extension line 1
+            painter.line_segment([to_screen(x2, y2), s2], stroke); // extension line 2
+            painter.line_segment([s1, s2], stroke);                // dimension line
+            arrow(s1, s2);
+            arrow(s2, s1);
+            painter.text(to_screen(tpos.0, tpos.1), talign, &text, font, color);
+        }
+        DimKind::Radial { center, edge } => {
+            let (cx, cy) = center.to_f64();
+            let (ex, ey) = edge.to_f64();
+            let (sc, se) = (to_screen(cx, cy), to_screen(ex, ey));
+            painter.line_segment([sc, se], stroke);
+            arrow(se, sc); // arrow at the rim, pointing in
+            painter.text(se, egui::Align2::LEFT_BOTTOM, &text, font, color);
+        }
+        DimKind::Diameter { center, edge } => {
+            let (cx, cy) = center.to_f64();
+            let (ex, ey) = edge.to_f64();
+            let (se, so) = (to_screen(ex, ey), to_screen(2.0 * cx - ex, 2.0 * cy - ey));
+            painter.line_segment([se, so], stroke);
+            arrow(se, so);
+            arrow(so, se);
+            painter.text(to_screen(cx, cy), egui::Align2::CENTER_BOTTOM, &text, font, color);
+        }
     }
 }
 

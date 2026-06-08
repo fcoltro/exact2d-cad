@@ -4,7 +4,7 @@
 
 use exact2d_algebra::Rational;
 use exact2d_geometry::{Point2d, Curve};
-use exact2d_document::{Document, EntityKind, EntityId, Layer};
+use exact2d_document::{Document, EntityKind, EntityId, Layer, Dimension, DimKind, LinearOrient};
 use exact2d_cad::{SnapSettings, SnapPoint, SnapKind, best_snap, pick_at};
 use exact2d_constraint::{Sketch, Constraint, PointId};
 use std::collections::HashMap;
@@ -266,6 +266,29 @@ impl AppState {
                             self.sketch.add_constraint(Constraint::Distance(pt1, pt2, d));
                         }
                     }
+
+                    // Also create a real, persistent dimension annotation entity that
+                    // measures the picked geometry and displays the value (styled).
+                    let style = self.document.dim_styles.current;
+                    let p1w = Point2d::from_f64(x1, y1);
+                    let p2w = Point2d::from_f64(x2, y2);
+                    let line_point = Point2d::from_f64(self.cursor_world.0, self.cursor_world.1);
+                    let kind = if is_arc {
+                        DimKind::Radial { center: p1w, edge: p2w }
+                    } else {
+                        let (mid_x, mid_y) = ((x1 + x2) / 2.0, (y1 + y2) / 2.0);
+                        let angle_deg = (py - mid_y).atan2(px - mid_x).to_degrees().abs();
+                        let orientation = if angle_deg > 67.5 && angle_deg < 112.5 {
+                            LinearOrient::Horizontal
+                        } else if !(22.5..=157.5).contains(&angle_deg) {
+                            LinearOrient::Vertical
+                        } else {
+                            LinearOrient::Aligned
+                        };
+                        DimKind::Linear { p1: p1w, p2: p2w, line_point, orientation }
+                    };
+                    self.document.add(EntityKind::Dimension(Dimension::new(kind, style)));
+
                     self.solve_constraints();
                 }
                 self.tool = Tool::Select;
@@ -1228,6 +1251,14 @@ mod tests {
         // Find DistanceX constraint
         let found_dist = a.sketch.constraints().iter().any(|c| matches!(c, Constraint::DistanceX(..)));
         assert!(found_dist, "expected a DistanceX constraint added");
+
+        // A real Dimension annotation entity should also have been created,
+        // measuring the 10-unit horizontal distance.
+        let dim = a.document.iter().find_map(|e| match &e.kind {
+            EntityKind::Dimension(d) => Some(d.clone()),
+            _ => None,
+        }).expect("a Dimension entity should be created");
+        assert!((dim.measure() - 10.0).abs() < 1e-6, "dimension measures {}", dim.measure());
     }
 
     // ──────────────────────────────────────────────────────────────────────────

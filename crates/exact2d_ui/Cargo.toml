@@ -1,4 +1,6 @@
 [package]
+# Proprietary, all rights reserved — never publish to crates.io.
+publish = false
 name = "exact2d_ui"
 version = "0.1.0"
 edition = "2021"

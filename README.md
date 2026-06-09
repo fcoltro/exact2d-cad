@@ -44,4 +44,7 @@ constraint solver, DXF/SVG/native I/O, and an egui application shell.
 
 ## License
 
-Licensed under the **GNU General Public License v3.0** — see [LICENSE](LICENSE).
+**Proprietary — Copyright © 2026 Fabio Coltro. All Rights Reserved.** Not open
+source; see [LICENSE](LICENSE). (Versions published up to tag `v0.2.0` were
+released under the GPL-3.0 and remain available under that license for copies
+already distributed.)

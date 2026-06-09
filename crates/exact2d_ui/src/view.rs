@@ -23,6 +23,12 @@ use tessellate::draw_curve;
 pub struct UiState {
     /// Current text in the command-line input box.
     pub command_input: String,
+    /// Dynamic-input HUD (editable Length/Angle floating by the cursor while
+    /// drawing a line). `dyn_active` tracks whether it was shown last frame, so it
+    /// can auto-focus the Length field the moment it first appears.
+    pub dyn_length: String,
+    pub dyn_angle: String,
+    pub dyn_active: bool,
 }
 
 /// Build the entire UI for one frame.
@@ -438,6 +444,58 @@ fn canvas(ctx: &Context, app: &mut AppState, ui_state: &mut UiState) {
             }
         }
 
+        // ── Dynamic-input HUD: an editable Length/Angle box floats by the cursor
+        // while drawing a line (guided drawing). Commits via the polar-coordinate
+        // path (@len<angle), so the geometry math is the tested one. ──
+        let line_ref = if let Tool::Line { last: Some(p0) } = &app.tool {
+            Some(p0.to_f64())
+        } else {
+            None
+        };
+        if let (true, Some((rx, ry))) = (app.dyn_on, line_ref) {
+            let (cx, cy) = app.cursor_world;
+            let live_len = ((cx - rx).powi(2) + (cy - ry).powi(2)).sqrt();
+            let mut live_ang = (cy - ry).atan2(cx - rx).to_degrees();
+            if live_ang < 0.0 { live_ang += 360.0; }
+
+            let len_id = egui::Id::new("dyn_len");
+            let ang_id = egui::Id::new("dyn_ang");
+            if !ctx.memory(|m| m.has_focus(len_id)) { ui_state.dyn_length = format!("{:.2}", live_len); }
+            if !ctx.memory(|m| m.has_focus(ang_id)) { ui_state.dyn_angle = format!("{:.1}", live_ang); }
+
+            let cur = app.view.world_to_screen(cx, cy);
+            let hud_pos = pos2(origin.x + cur.0 as f32 + 18.0, origin.y + cur.1 as f32 - 38.0);
+            let first_show = !ui_state.dyn_active;
+            let mut commit = false;
+            egui::Area::new(egui::Id::new("dyn_input_hud"))
+                .fixed_pos(hud_pos)
+                .order(egui::Order::Foreground)
+                .show(ctx, |ui| {
+                    corner_glass_frame().show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("L").size(12.0).color(Color32::from_gray(170)));
+                            let lr = ui.add(egui::TextEdit::singleline(&mut ui_state.dyn_length)
+                                .id(len_id).desired_width(58.0));
+                            ui.label(egui::RichText::new("∠").size(12.0).color(Color32::from_gray(170)));
+                            let ar = ui.add(egui::TextEdit::singleline(&mut ui_state.dyn_angle)
+                                .id(ang_id).desired_width(48.0));
+                            if first_show { lr.request_focus(); } // type immediately
+                            if ui.input(|i| i.key_pressed(egui::Key::Enter)) && (lr.lost_focus() || ar.lost_focus()) {
+                                commit = true;
+                            }
+                        });
+                    });
+                });
+            ui_state.dyn_active = true;
+            if commit {
+                let cmd = format!("@{}<{}", ui_state.dyn_length.trim(), ui_state.dyn_angle.trim());
+                app.run_command(&cmd);
+                ui_state.dyn_active = false; // re-focus Length for the next segment
+            }
+        } else {
+            ui_state.dyn_active = false;
+        }
+
         // While a corner action is active the click was consumed above — don't pick.
         let place_point = !corner_active && if matches!(app.tool, Tool::Select) {
             response.clicked()
@@ -505,9 +563,16 @@ fn canvas(ctx: &Context, app: &mut AppState, ui_state: &mut UiState) {
         if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             app.execute(Command::Cancel);
         }
-        // Enter or Space commits the active drawing tool (like Polyline)
+        // Enter or Space commits the active drawing tool (like Polyline) — but not
+        // while a text field (command line or the dynamic-input HUD) has focus.
+        let in_text_field = {
+            let f = ctx.memory(|mem| mem.focused());
+            f == Some(egui::Id::new("command_line_input"))
+                || f == Some(egui::Id::new("dyn_len"))
+                || f == Some(egui::Id::new("dyn_ang"))
+        };
         if ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space))
-            && ctx.memory(|mem| mem.focused()) != Some(egui::Id::new("command_line_input")) {
+            && !in_text_field {
                 app.run_command("");
             }
         // Entity under the cursor (Select mode) — drives the hover highlight and is
@@ -559,9 +624,12 @@ fn canvas(ctx: &Context, app: &mut AppState, ui_state: &mut UiState) {
         // Automatically focus command input if user starts typing when hovering the canvas and command input is not focused
         let focused_id = ctx.memory(|mem| mem.focused());
         let cmd_input_id = egui::Id::new("command_line_input");
+        // Don't hijack typing when a dynamic-input HUD field already has focus.
+        let hud_focused = focused_id == Some(egui::Id::new("dyn_len"))
+            || focused_id == Some(egui::Id::new("dyn_ang"));
         let mut focus_cmd = false;
         let mut text_to_append = String::new();
-        if response.hovered() && focused_id != Some(cmd_input_id) {
+        if response.hovered() && focused_id != Some(cmd_input_id) && !hud_focused {
             ui.input(|i| {
                 for event in &i.events {
                     if let egui::Event::Text(text) = event {
@@ -1314,7 +1382,9 @@ fn canvas(ctx: &Context, app: &mut AppState, ui_state: &mut UiState) {
             let dims_text = if has_dims {
                 let cursor = Point2d::from_f64(app.cursor_world.0, app.cursor_world.1);
                 match &app.tool {
-                    Tool::Line { last: Some(p0) } => {
+                    // The editable Length/Angle HUD replaces the read-only readout
+                    // for the line tool when dynamic input is on.
+                    Tool::Line { last: Some(p0) } if !app.dyn_on => {
                         let d = p0.dist_f64(&cursor);
                         let (x0, y0) = p0.to_f64();
                         let (x1, y1) = cursor.to_f64();

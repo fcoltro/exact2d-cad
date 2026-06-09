@@ -476,14 +476,51 @@ fn canvas(ctx: &Context, app: &mut AppState, ui_state: &mut UiState) {
             && ctx.memory(|mem| mem.focused()) != Some(egui::Id::new("command_line_input")) {
                 app.run_command("");
             }
-        // Right click: commit a polyline; repeat the last command when idle;
-        // otherwise act like Enter (finish/cancel the active tool). Mirrors AutoCAD.
-        if response.secondary_clicked() {
-            match app.tool {
-                Tool::Polyline { .. } => app.run_command(""),
-                Tool::Select => app.repeat_last_command(),
-                _ => app.run_command(""),
+        // Entity under the cursor (Select mode) — drives the hover highlight and is
+        // the target for a right-click context menu.
+        let hovered_id = if matches!(app.tool, Tool::Select) {
+            response.hover_pos().and_then(|p| {
+                let (wx, wy) = app.view.screen_to_world((p.x - origin.x) as f64, (p.y - origin.y) as f64);
+                exact2d_cad::pick_at(&app.document, wx, wy, app.view.pixel_world_size() * 6.0)
+            }).filter(|&id| id != app.origin_id)
+        } else {
+            None
+        };
+
+        // Right click: in Select mode show a context-sensitive menu (modern direct
+        // manipulation); during an active tool it confirms/cancels (AutoCAD-like).
+        if matches!(app.tool, Tool::Select) {
+            // Right-clicking an unselected entity targets it.
+            if response.secondary_clicked() && app.selection.is_empty() {
+                if let Some(h) = hovered_id { app.selection = vec![h]; }
             }
+            response.context_menu(|ui| {
+                if !app.selection.is_empty() {
+                    if ui.button("🗑  Delete").clicked() { app.erase_selection(); ui.close_menu(); }
+                    ui.separator();
+                    let acts = [
+                        ("Move", Command::Activate(Tool::Move { base: None, ids: vec![] })),
+                        ("Copy", Command::Activate(Tool::Copy { base: None, ids: vec![] })),
+                        ("Rotate", Command::Activate(Tool::Rotate { base: None, ids: vec![] })),
+                        ("Scale", Command::Activate(Tool::Scale { base: None, reference: None, ids: vec![] })),
+                        ("Mirror", Command::Activate(Tool::Mirror { first: None, ids: vec![] })),
+                    ];
+                    for (label, cmd) in acts {
+                        if ui.button(label).clicked() { app.execute(cmd); ui.close_menu(); }
+                    }
+                    ui.separator();
+                }
+                if let Some(last) = app.last_command.clone() {
+                    if ui.button(format!("🔁  Repeat: {last}")).clicked() { app.repeat_last_command(); ui.close_menu(); }
+                }
+                if ui.button("Select All").clicked() { app.execute(Command::SelectAll); ui.close_menu(); }
+                if ui.button("Zoom Extents").clicked() { app.zoom_extents(); ui.close_menu(); }
+                ui.separator();
+                ui.checkbox(&mut app.grid_on, "Grid");
+                ui.checkbox(&mut app.snap_on, "Object Snap");
+            });
+        } else if response.secondary_clicked() {
+            app.run_command(""); // active tool: confirm/cancel
         }
         // Automatically focus command input if user starts typing when hovering the canvas and command input is not focused
         let focused_id = ctx.memory(|mem| mem.focused());
@@ -532,6 +569,45 @@ fn canvas(ctx: &Context, app: &mut AppState, ui_state: &mut UiState) {
             }
         }
 
+        // On-selection floating mini-toolbar (Plasticity/Illustrator-style): quick
+        // action icons hovering just above the selection. Deferred actions keep it
+        // from borrowing `app` while the toolbar UI is built.
+        if matches!(app.tool, Tool::Select) && !app.selection.is_empty() {
+            let mut bb: Option<exact2d_geometry::BoundingBox> = None;
+            for &id in &app.selection {
+                if let Some(b) = app.document.get(id).and_then(|e| e.bounding_box()) {
+                    bb = Some(match bb { Some(a) => a.union(&b), None => b });
+                }
+            }
+            if let Some(bb) = bb {
+                let (minx, _) = bb.min.to_f64();
+                let (maxx, maxy) = bb.max.to_f64();
+                let (sx, sy) = app.view.world_to_screen((minx + maxx) / 2.0, maxy);
+                let bar_pos = pos2(origin.x + sx as f32, origin.y + sy as f32 - 44.0);
+                let mut action: Option<Command> = None;
+                let mut do_erase = false;
+                egui::Area::new(egui::Id::new("selection_toolbar"))
+                    .fixed_pos(bar_pos)
+                    .order(egui::Order::Foreground)
+                    .show(ctx, |ui| {
+                        egui::Frame::popup(ui.style()).show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                use crate::icons::{Icon, icon_button};
+                                if icon_button(ui, Icon::Move, "Move", false).clicked() { action = Some(Command::Activate(Tool::Move { base: None, ids: vec![] })); }
+                                if icon_button(ui, Icon::Copy, "Copy", false).clicked() { action = Some(Command::Activate(Tool::Copy { base: None, ids: vec![] })); }
+                                if icon_button(ui, Icon::Rotate, "Rotate", false).clicked() { action = Some(Command::Activate(Tool::Rotate { base: None, ids: vec![] })); }
+                                if icon_button(ui, Icon::Scale, "Scale", false).clicked() { action = Some(Command::Activate(Tool::Scale { base: None, reference: None, ids: vec![] })); }
+                                if icon_button(ui, Icon::Mirror, "Mirror", false).clicked() { action = Some(Command::Activate(Tool::Mirror { first: None, ids: vec![] })); }
+                                if icon_button(ui, Icon::Dimension, "Dimension", false).clicked() { action = Some(Command::Activate(Tool::Dimension { stage: 0, p1: None, p2: None })); }
+                                if icon_button(ui, Icon::Erase, "Delete", false).clicked() { do_erase = true; }
+                            });
+                        });
+                    });
+                if let Some(cmd) = action { app.execute(cmd); }
+                if do_erase { app.erase_selection(); }
+            }
+        }
+
         // ── Drawing (immutable borrows only) ──
         let to_screen = |wx: f64, wy: f64| {
             let (sx, sy) = app.view.world_to_screen(wx, wy);
@@ -545,9 +621,16 @@ fn canvas(ctx: &Context, app: &mut AppState, ui_state: &mut UiState) {
         for e in app.document.iter() {
             let (r, g, b) = resolve_color(app, e);
             let selected = app.selection.contains(&e.id);
-            let color = if selected { Color32::from_rgb(0, 200, 255) } else { Color32::from_rgb(r, g, b) };
-            let stroke = Stroke::new(if selected { 2.5 } else { 1.5 }, color);
-            draw_entity(&painter, app, e, origin, stroke);
+            let hovered = !selected && Some(e.id) == hovered_id;
+            let color = if selected {
+                Color32::from_rgb(0, 200, 255)
+            } else if hovered {
+                Color32::from_rgb(120, 230, 255) // pre-selection hover glow
+            } else {
+                Color32::from_rgb(r, g, b)
+            };
+            let width = if selected { 2.5 } else if hovered { 2.0 } else { 1.5 };
+            draw_entity(&painter, app, e, origin, Stroke::new(width, color));
         }
 
         // Draw transparent dashed CV polygon for selected splines

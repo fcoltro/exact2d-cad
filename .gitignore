@@ -16,3 +16,7 @@ Thumbs.db
 
 # Runtime log dropped next to the binary
 exact2d_log.txt
+
+# Local release packages
+exact2d-cad-v*-windows-x86_64/
+exact2d-cad-v*.zip

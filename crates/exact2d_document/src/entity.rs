@@ -4,7 +4,6 @@
 use exact2d_geometry::{Curve, CurveSegment, BoundingBox, Transform2d, Point2d};
 use exact2d_algebra::Rational;
 use crate::properties::{Color, LineWeight, LineTypeRef, XData};
-use crate::dimension::Dimension;
 
 /// Stable identifier for an entity within a document.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -22,8 +21,6 @@ pub enum EntityKind {
     Point(Point2d),
     /// Single-line text anchored at a point, with height and rotation (radians).
     Text { anchor: Point2d, content: String, height: f64, rotation: f64 },
-    /// A dimension annotation (measures geometry, displays the value, styled).
-    Dimension(Dimension),
     /// Construction line through a point with a direction (infinite both ways).
     XLine { through: Point2d, dir: (Rational, Rational) },
     /// Ray from a point in a direction (infinite one way).
@@ -70,7 +67,6 @@ impl Entity {
                 let (ax, ay) = anchor.to_f64();
                 Some(BoundingBox::from_corners(ax, ay, ax + w, ay + height))
             }
-            EntityKind::Dimension(d) => Some(d.bounding_box()),
             EntityKind::Insert { .. } => None, // resolved via block expansion
             EntityKind::XLine { .. } | EntityKind::Ray { .. } => None, // infinite
         }
@@ -87,7 +83,6 @@ impl Entity {
                 height: height * t.scale_factor(),
                 rotation: rotation + t.rotation_angle(),
             },
-            EntityKind::Dimension(d) => EntityKind::Dimension(d.transformed(t)),
             EntityKind::XLine { through, dir } => EntityKind::XLine {
                 through: t.apply_point(through),
                 dir: transform_dir(t, dir),

@@ -62,7 +62,6 @@ pub fn list_entity(doc: &Document, id: EntityId) -> Option<String> {
         EntityKind::Curve(Curve::Poly(p)) => format!("POLYLINE  {} segments", p.segments.len()),
         EntityKind::Point(p) => format!("POINT  ({},{})", p.x, p.y),
         EntityKind::Text { content, .. } => format!("TEXT  \"{}\"", content),
-        EntityKind::Dimension(d) => format!("DIMENSION  value={:.4}", d.measure()),
         EntityKind::XLine { .. } => "XLINE (construction)".to_string(),
         EntityKind::Ray { .. } => "RAY (construction)".to_string(),
         EntityKind::Insert { block, .. } => format!("INSERT  block=\"{}\"", block),

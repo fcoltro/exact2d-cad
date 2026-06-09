@@ -89,14 +89,3 @@ fn mirror_tool_reflects_selection() {
     } else { panic!("expected a line") }
 }
 
-#[test]
-fn dimension_tool_adds_constraint() {
-    let mut a = app();
-    a.add_entity(line(0, 0, 5, 0));
-    a.run_command("DIM");
-    click(&mut a, 0.0, 0.0);           // first endpoint
-    click(&mut a, 5.0, 0.0);           // second endpoint
-    click(&mut a, 2.5, 3.0);           // placement → creates the dimension constraint
-    assert!(a.constraints_enabled, "placing a dimension turns constraints on");
-    assert!(!a.sketch.constraints().is_empty(), "a dimension constraint should be recorded");
-}

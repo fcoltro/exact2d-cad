@@ -1263,14 +1263,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "exact2d_constraint"
-version = "0.1.0"
-dependencies = [
- "exact2d_algebra",
- "exact2d_geometry",
-]
-
-[[package]]
 name = "exact2d_document"
 version = "0.1.0"
 dependencies = [
@@ -1321,7 +1313,6 @@ dependencies = [
  "egui",
  "exact2d_algebra",
  "exact2d_cad",
- "exact2d_constraint",
  "exact2d_document",
  "exact2d_geometry",
  "exact2d_io",

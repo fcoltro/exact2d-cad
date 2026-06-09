@@ -10,7 +10,6 @@ exact2d_algebra    = { path = "../exact2d_algebra" }
 exact2d_geometry   = { path = "../exact2d_geometry" }
 exact2d_document   = { path = "../exact2d_document" }
 exact2d_cad        = { path = "../exact2d_cad" }
-exact2d_constraint = { path = "../exact2d_constraint" }
 exact2d_io         = { path = "../exact2d_io" }
 # egui is backend-agnostic: the view code compiles without a windowing backend.
 egui = "0.29"

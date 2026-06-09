@@ -34,8 +34,6 @@ pub enum Tool {
     Polyline { pts: Vec<Point2d> },
     /// Polygon: center point, then radius/vertex point.
     Polygon { center: Option<Point2d>, sides: usize },
-    /// Click points/entities to dimension, then click to place.
-    Dimension { stage: usize, p1: Option<usize>, p2: Option<usize> },
     /// Unified text: click to set the anchor, then type the content (single- or
     /// multi-line) at the command line to create a Text entity.
     Text { anchor: Option<Point2d>, height: f64 },
@@ -88,7 +86,6 @@ impl Tool {
             Tool::Spline { .. } => "SPLINE",
             Tool::Polyline { .. } => "POLYLINE",
             Tool::Polygon { .. } => "POLYGON",
-            Tool::Dimension { .. } => "DIMENSION",
             Tool::Text { .. } => "TEXT",
             Tool::Rotate { .. } => "ROTATE",
             Tool::Scale { .. } => "SCALE",
@@ -110,7 +107,7 @@ impl Tool {
     /// Feed a (possibly snapped) world point to the tool.
     pub fn on_point(&mut self, p: Point2d) -> ToolEvent {
         match self {
-            Tool::Select | Tool::Dimension { .. } | Tool::Text { .. } => ToolEvent::Pending,
+            Tool::Select | Tool::Text { .. } => ToolEvent::Pending,
 
             Tool::Line { last } => {
                 let ev = match last.take() {
@@ -281,11 +278,6 @@ impl Tool {
             Tool::Spline { pts } => pts.clear(),
             Tool::Polyline { pts } => pts.clear(),
             Tool::Polygon { center, .. } => *center = None,
-            Tool::Dimension { stage, p1, p2 } => {
-                *stage = 0;
-                *p1 = None;
-                *p2 = None;
-            }
             Tool::Rotate { base, .. } => *base = None,
             Tool::Scale { base, reference, .. } => { *base = None; *reference = None; }
             Tool::Mirror { first, .. } => *first = None,
@@ -309,7 +301,6 @@ impl Tool {
             Tool::Spline { pts } => !pts.is_empty(),
             Tool::Polyline { pts } => !pts.is_empty(),
             Tool::Polygon { center, .. } => center.is_some(),
-            Tool::Dimension { stage, .. } => *stage > 0,
             Tool::Rotate { base, .. } => base.is_some(),
             Tool::Scale { base, .. } => base.is_some(),
             Tool::Mirror { first, .. } => first.is_some(),
@@ -423,7 +414,7 @@ impl Tool {
             Tool::Scale { base, .. } => base.clone(),
             Tool::Mirror { first, .. } => first.clone(),
             Tool::Stretch { base, c1, .. } => base.clone().or_else(|| c1.clone()),
-            Tool::Dimension { .. } | Tool::Text { .. }
+            Tool::Text { .. }
             | Tool::Trim | Tool::Extend
             | Tool::Offset { .. } | Tool::Fillet { .. } | Tool::Chamfer { .. } => None,
             Tool::Select => None,

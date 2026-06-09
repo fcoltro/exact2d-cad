@@ -1,16 +1,14 @@
 //! Undo/redo history (spec §4.1 / §6.1) — snapshot-based.
 //!
 //! Before each document mutation the app calls `snapshot`, capturing the current
-//! state on the undo stack and clearing the redo stack (a new edit branches off).
-//! `undo`/`redo` swap states between the two stacks.
+//! document on the undo stack and clearing the redo stack (a new edit branches off).
+//! `undo`/`redo` swap documents between the two stacks.
 
-use exact2d_document::{Document, EntityId};
-use exact2d_constraint::{Sketch, PointId};
-use std::collections::HashMap;
+use exact2d_document::Document;
 
 pub struct History {
-    past: Vec<(Document, Sketch, HashMap<EntityId, Vec<PointId>>)>,
-    future: Vec<(Document, Sketch, HashMap<EntityId, Vec<PointId>>)>,
+    past: Vec<Document>,
+    future: Vec<Document>,
     /// Maximum retained undo states (older ones are dropped).
     limit: usize,
 }
@@ -26,39 +24,24 @@ impl History {
         History { past: Vec::new(), future: Vec::new(), limit }
     }
 
-    /// Record the current state as a restore point. Call this just before mutating.
-    pub fn snapshot(
-        &mut self,
-        doc: &Document,
-        sketch: &Sketch,
-        map: &HashMap<EntityId, Vec<PointId>>,
-    ) {
-        self.past.push((doc.clone(), sketch.clone(), map.clone()));
+    /// Record the current document as a restore point. Call just before mutating.
+    pub fn snapshot(&mut self, doc: &Document) {
+        self.past.push(doc.clone());
         if self.past.len() > self.limit { self.past.remove(0); }
         self.future.clear(); // a new edit invalidates the redo branch
     }
 
-    /// Undo: returns the previous state, given the current one.
-    pub fn undo(
-        &mut self,
-        doc: &Document,
-        sketch: &Sketch,
-        map: &HashMap<EntityId, Vec<PointId>>,
-    ) -> Option<(Document, Sketch, HashMap<EntityId, Vec<PointId>>)> {
+    /// Undo: returns the previous document, given the current one.
+    pub fn undo(&mut self, doc: &Document) -> Option<Document> {
         let prev = self.past.pop()?;
-        self.future.push((doc.clone(), sketch.clone(), map.clone()));
+        self.future.push(doc.clone());
         Some(prev)
     }
 
-    /// Redo: returns the next state, given the current one.
-    pub fn redo(
-        &mut self,
-        doc: &Document,
-        sketch: &Sketch,
-        map: &HashMap<EntityId, Vec<PointId>>,
-    ) -> Option<(Document, Sketch, HashMap<EntityId, Vec<PointId>>)> {
+    /// Redo: returns the next document, given the current one.
+    pub fn redo(&mut self, doc: &Document) -> Option<Document> {
         let next = self.future.pop()?;
-        self.past.push((doc.clone(), sketch.clone(), map.clone()));
+        self.past.push(doc.clone());
         Some(next)
     }
 
@@ -85,34 +68,25 @@ mod tests {
     #[test]
     fn undo_redo_roundtrip() {
         let mut doc = Document::new();
-        let sk = Sketch::new();
-        let map = HashMap::new();
         let mut hist = History::new();
 
-        hist.snapshot(&doc, &sk, &map);
+        hist.snapshot(&doc);
         doc.add(line(0));
         assert_eq!(doc.len(), 1);
 
-        hist.snapshot(&doc, &sk, &map);
+        hist.snapshot(&doc);
         doc.add(line(5));
         assert_eq!(doc.len(), 2);
 
-        // Undo back to 1 entity
-        let (d, _, _) = hist.undo(&doc, &sk, &map).unwrap();
-        doc = d;
+        doc = hist.undo(&doc).unwrap();
         assert_eq!(doc.len(), 1);
-        // Undo back to empty
-        let (d, _, _) = hist.undo(&doc, &sk, &map).unwrap();
-        doc = d;
+        doc = hist.undo(&doc).unwrap();
         assert_eq!(doc.len(), 0);
         assert!(!hist.can_undo());
 
-        // Redo forward
-        let (d, _, _) = hist.redo(&doc, &sk, &map).unwrap();
-        doc = d;
+        doc = hist.redo(&doc).unwrap();
         assert_eq!(doc.len(), 1);
-        let (d, _, _) = hist.redo(&doc, &sk, &map).unwrap();
-        doc = d;
+        doc = hist.redo(&doc).unwrap();
         assert_eq!(doc.len(), 2);
         assert!(!hist.can_redo());
     }
@@ -120,24 +94,19 @@ mod tests {
     #[test]
     fn new_edit_clears_redo() {
         let mut doc = Document::new();
-        let sk = Sketch::new();
-        let map = HashMap::new();
         let mut hist = History::new();
-        hist.snapshot(&doc, &sk, &map); doc.add(line(0));
-        let (d, _, _) = hist.undo(&doc, &sk, &map).unwrap();       // back to empty
-        doc = d;
+        hist.snapshot(&doc); doc.add(line(0));
+        doc = hist.undo(&doc).unwrap();
         assert!(hist.can_redo());
-        hist.snapshot(&doc, &sk, &map); doc.add(line(9)); // new branch
+        hist.snapshot(&doc); doc.add(line(9));
         assert!(!hist.can_redo(), "new edit must clear redo stack");
     }
 
     #[test]
     fn limit_bounds_growth() {
         let mut doc = Document::new();
-        let sk = Sketch::new();
-        let map = HashMap::new();
         let mut hist = History::with_limit(3);
-        for i in 0..10 { hist.snapshot(&doc, &sk, &map); doc.add(line(i)); }
+        for i in 0..10 { hist.snapshot(&doc); doc.add(line(i)); }
         assert_eq!(hist.undo_depth(), 3);
     }
 }

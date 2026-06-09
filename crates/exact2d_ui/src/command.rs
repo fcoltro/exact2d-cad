@@ -5,23 +5,6 @@
 
 use crate::tools::Tool;
 
-#[derive(Clone, Debug, PartialEq)]
-pub enum ConstraintType {
-    Horizontal,
-    Vertical,
-    Parallel,
-    Perpendicular,
-    Distance(Option<f64>),
-    Fix,
-    Tangent,
-    Concentric,
-    Coincident,
-    Equal,
-    Symmetric,
-    Midpoint,
-    Angle(Option<f64>),
-}
-
 #[allow(clippy::large_enum_variant)] // Activate(Tool) dominates; commands are transient
 #[derive(Clone, Debug)]
 pub enum Command {
@@ -44,10 +27,6 @@ pub enum Command {
     SelectAll,
     /// Cancel current operation (Esc / blank).
     Cancel,
-    /// Toggle parametric constraints.
-    ToggleConstraints,
-    /// Add a constraint of the given type.
-    AddConstraint(ConstraintType),
     /// Unrecognized input.
     Unknown(String),
 }
@@ -130,7 +109,7 @@ pub fn parse_command(input: &str) -> Command {
         "POLYLINE" | "PLINE" | "PL"
                                 => Command::Activate(Tool::Polyline { pts: vec![] }),
         "SELECT" | "SE"         => Command::Activate(Tool::Select),
-        "DIMENSION" | "DIM" | "D" => Command::Activate(Tool::Dimension { stage: 0, p1: None, p2: None }),
+        // Smart Dimension is hidden for now (see project notes) — revisit later.
         "TEXT" | "T" | "DT" | "DTEXT" | "MTEXT" | "MT"
                                 => Command::Activate(Tool::Text { anchor: None, height: 2.5 }),
         "ROTATE" | "RO"         => Command::Activate(Tool::Rotate { base: None, ids: vec![] }),
@@ -157,33 +136,7 @@ pub fn parse_command(input: &str) -> Command {
         "ALL"                   => Command::SelectAll,
         "ZOOM" | "Z"            => parse_zoom(&rest),
         "LAYER" | "LA"          => parse_layer(&rest),
-        "CONSTRAINT" | "CON" => {
-            let sub = rest.first().map(|s| s.to_ascii_uppercase()).unwrap_or_default();
-            match sub.as_str() {
-                "HORIZONTAL" | "H" => Command::AddConstraint(ConstraintType::Horizontal),
-                "VERTICAL" | "V" => Command::AddConstraint(ConstraintType::Vertical),
-                "PARALLEL" | "PAR" => Command::AddConstraint(ConstraintType::Parallel),
-                "PERPENDICULAR" | "PERP" => Command::AddConstraint(ConstraintType::Perpendicular),
-                "FIX" | "F" => Command::AddConstraint(ConstraintType::Fix),
-                "DISTANCE" | "D" => {
-                    let val = rest.get(1).and_then(|s| s.parse::<f64>().ok());
-                    Command::AddConstraint(ConstraintType::Distance(val))
-                }
-                "TANGENT" | "TAN" | "T" => Command::AddConstraint(ConstraintType::Tangent),
-                "CONCENTRIC" | "CON" => Command::AddConstraint(ConstraintType::Concentric),
-                "COINCIDENT" | "COIN" => Command::AddConstraint(ConstraintType::Coincident),
-                "EQUAL" | "EQ" | "E" => Command::AddConstraint(ConstraintType::Equal),
-                "SYMMETRIC" | "SYM" => Command::AddConstraint(ConstraintType::Symmetric),
-                "MIDPOINT" | "MID" => Command::AddConstraint(ConstraintType::Midpoint),
-                "ANGLE" | "ANG" => {
-                    let deg = rest.get(1).and_then(|s| s.parse::<f64>().ok());
-                    let val = deg.map(|d| d.to_radians());
-                    Command::AddConstraint(ConstraintType::Angle(val))
-                }
-                _ => Command::Unknown(trimmed.to_string()),
-            }
-        }
-        "TOGGLE_CONSTRAINTS" | "CONSTRAINTS" => Command::ToggleConstraints,
+        // Parametric constraints (CON …) are hidden for now — revisit later.
         _                       => Command::Unknown(trimmed.to_string()),
     }
 }
@@ -242,23 +195,10 @@ mod tests {
     }
 
     #[test]
-    fn parses_constraints() {
-        assert!(matches!(parse_command("CON H"), Command::AddConstraint(ConstraintType::Horizontal)));
-        assert!(matches!(parse_command("CONSTRAINT VERTICAL"), Command::AddConstraint(ConstraintType::Vertical)));
-        assert!(matches!(parse_command("CON PAR"), Command::AddConstraint(ConstraintType::Parallel)));
-        assert!(matches!(parse_command("CON PERP"), Command::AddConstraint(ConstraintType::Perpendicular)));
-        assert!(matches!(parse_command("CON F"), Command::AddConstraint(ConstraintType::Fix)));
-        assert!(matches!(parse_command("CON D 15.5"), Command::AddConstraint(ConstraintType::Distance(Some(d))) if (d - 15.5).abs() < 1e-9));
-        assert!(matches!(parse_command("CON D"), Command::AddConstraint(ConstraintType::Distance(None))));
-        assert!(matches!(parse_command("CON TAN"), Command::AddConstraint(ConstraintType::Tangent)));
-        assert!(matches!(parse_command("CON CON"), Command::AddConstraint(ConstraintType::Concentric)));
-        assert!(matches!(parse_command("CON COIN"), Command::AddConstraint(ConstraintType::Coincident)));
-        assert!(matches!(parse_command("CON EQ"), Command::AddConstraint(ConstraintType::Equal)));
-        assert!(matches!(parse_command("CON SYM"), Command::AddConstraint(ConstraintType::Symmetric)));
-        assert!(matches!(parse_command("CON MID"), Command::AddConstraint(ConstraintType::Midpoint)));
-        assert!(matches!(parse_command("CON ANG 45"), Command::AddConstraint(ConstraintType::Angle(Some(a))) if (a - 45.0_f64.to_radians()).abs() < 1e-9));
-        assert!(matches!(parse_command("CON ANG"), Command::AddConstraint(ConstraintType::Angle(None))));
-        assert!(matches!(parse_command("CONSTRAINTS"), Command::ToggleConstraints));
+    fn constraint_commands_are_disabled_for_now() {
+        // Parametric is hidden; CON … no longer maps to constraint commands.
+        assert!(matches!(parse_command("CON H"), Command::Unknown(_)));
+        assert!(matches!(parse_command("CONSTRAINTS"), Command::Unknown(_)));
     }
 
     #[test]

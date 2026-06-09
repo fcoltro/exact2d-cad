@@ -98,7 +98,6 @@ pub(super) fn menu_bar(ctx: &Context, app: &mut AppState) {
                 tool_menu_item(ui, app, "Polygon", Tool::Polygon { center: None, sides: 4 });
                 tool_menu_item(ui, app, "Spline", Tool::Spline { pts: vec![] });
                 tool_menu_item(ui, app, "Polyline", Tool::Polyline { pts: vec![] });
-                tool_menu_item(ui, app, "Smart Dimension", Tool::Dimension { stage: 0, p1: None, p2: None });
                 tool_menu_item(ui, app, "Text", Tool::Text { anchor: None, height: 2.5 });
             });
             ui.menu_button("Modify", |ui| {
@@ -156,7 +155,6 @@ pub(super) fn ribbon(ctx: &Context, app: &mut AppState) {
             tool_icon(ui, app, Icon::Rectangle, "Rectangle  (REC)", Tool::Rectangle { first: None });
             tool_icon(ui, app, Icon::Polygon, "Polygon  (POL)", Tool::Polygon { center: None, sides: 4 });
             tool_icon(ui, app, Icon::Spline, "Spline  (SPL)", Tool::Spline { pts: vec![] });
-            tool_icon(ui, app, Icon::Dimension, "Smart Dimension  (DIM)", Tool::Dimension { stage: 0, p1: None, p2: None });
             ui.separator();
 
             // Modify group.
@@ -173,12 +171,6 @@ pub(super) fn ribbon(ctx: &Context, app: &mut AppState) {
             tool_icon(ui, app, Icon::Stretch, "Stretch  (S) — window, then base→destination", Tool::Stretch { c1: None, c2: None, base: None, ids: vec![] });
             if crate::icons::icon_button(ui, Icon::Erase, "Erase selection  (E / Del)", false).clicked() {
                 app.erase_selection();
-            }
-            ui.separator();
-
-            let con_enabled = app.constraints_enabled;
-            if ui.selectable_label(con_enabled, "⛓ Parametric").clicked() {
-                app.execute(Command::ToggleConstraints);
             }
         });
     });
@@ -238,10 +230,6 @@ pub(super) fn status_and_command(ctx: &Context, app: &mut AppState, ui_state: &m
                 app.ortho_on = false;
             }
             ui.toggle_value(&mut app.dyn_on, "DYN");
-            let mut con_enabled = app.constraints_enabled;
-            if ui.toggle_value(&mut con_enabled, "CONSTRAINTS").changed() {
-                app.execute(Command::ToggleConstraints);
-            }
             ui.separator();
             ui.label(format!("Units: {}", app.units_label()));
             ui.separator();

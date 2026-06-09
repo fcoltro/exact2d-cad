@@ -10,13 +10,9 @@ use exact2d_cad::pick_at;
 use crate::tools::Tool;
 
 impl AppState {
-    /// Resync the constraint sketch after a document mutation (no-op if constraints off).
-    pub(crate) fn resync_after_edit(&mut self) {
-        if self.constraints_enabled {
-            self.sync_sketch_from_document();
-            self.solve_constraints();
-        }
-    }
+    /// Post-edit hook. (Previously resynced the parametric sketch; now a no-op,
+    /// kept as the single place to re-add any post-modify housekeeping.)
+    pub(crate) fn resync_after_edit(&mut self) {}
 
     /// Handle a click for the entity-picking modify tools. Returns true if the click
     /// was consumed (so `canvas_click` should stop). These tools need document access
@@ -31,7 +27,7 @@ impl AppState {
         match self.tool.clone() {
             Tool::Trim => {
                 if let Some(id) = pick(self) {
-                    self.history.snapshot(&self.document, &self.sketch, &self.entity_points);
+                    self.history.snapshot(&self.document);
                     let cutters: Vec<EntityId> = self.document.iter().map(|e| e.id)
                         .filter(|&i| i != id && i != self.origin_id).collect();
                     edit::trim(&mut self.document, id, &cutters, px, py);
@@ -49,7 +45,7 @@ impl AppState {
                             .map(|c| (exact2d_geometry::point_to_curve_distance(c, px, py), e.id)))
                         .collect();
                     bs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-                    self.history.snapshot(&self.document, &self.sketch, &self.entity_points);
+                    self.history.snapshot(&self.document);
                     let mut done = false;
                     for (_, bid) in bs {
                         if edit::extend(&mut self.document, id, bid, px, py) { done = true; break; }
@@ -73,7 +69,7 @@ impl AppState {
                             let dp = exact2d_geometry::point_to_curve_distance(&plus, px, py);
                             let dm = exact2d_geometry::point_to_curve_distance(&minus, px, py);
                             let signed = if dp <= dm { dist.abs() } else { -dist.abs() };
-                            self.history.snapshot(&self.document, &self.sketch, &self.entity_points);
+                            self.history.snapshot(&self.document);
                             edit::offset(&mut self.document, &[src], signed);
                             self.resync_after_edit();
                         }
@@ -88,7 +84,7 @@ impl AppState {
                         None => self.tool = Tool::Fillet { radius, first: Some(id) },
                         Some(a) => {
                             if a != id {
-                                self.history.snapshot(&self.document, &self.sketch, &self.entity_points);
+                                self.history.snapshot(&self.document);
                                 edit::fillet(&mut self.document, a, id, radius, px, py);
                                 self.resync_after_edit();
                             }
@@ -104,7 +100,7 @@ impl AppState {
                         None => self.tool = Tool::Chamfer { dist, first: Some(id) },
                         Some(a) => {
                             if a != id {
-                                self.history.snapshot(&self.document, &self.sketch, &self.entity_points);
+                                self.history.snapshot(&self.document);
                                 edit::chamfer(&mut self.document, a, id, dist, dist);
                                 self.resync_after_edit();
                             }
@@ -132,7 +128,7 @@ impl AppState {
                         let window = (ax.min(bx), ay.min(by), ax.max(bx), ay.max(by));
                         let dx = px - bp.x.to_f64();
                         let dy = py - bp.y.to_f64();
-                        self.history.snapshot(&self.document, &self.sketch, &self.entity_points);
+                        self.history.snapshot(&self.document);
                         edit::stretch(&mut self.document, &ids, window, dx, dy);
                         self.resync_after_edit();
                         self.tool = Tool::Stretch { c1: None, c2: None, base: None, ids: vec![] };

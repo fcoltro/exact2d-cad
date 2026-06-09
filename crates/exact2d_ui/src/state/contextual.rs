@@ -148,7 +148,7 @@ impl AppState {
     /// Apply the in-progress corner action via the exact kernel, then clear it.
     pub fn apply_corner_action(&mut self) {
         if let Some(ca) = self.corner_action.take() {
-            self.history.snapshot(&self.document, &self.sketch, &self.entity_points);
+            self.history.snapshot(&self.document);
             match ca.kind {
                 CornerKind::Fillet => {
                     exact2d_cad::edit::fillet(

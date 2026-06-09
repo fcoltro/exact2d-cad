@@ -18,6 +18,10 @@ use crate::history::History;
 mod modify;
 /// Parametric-constraint integration (sketch sync, solve cycle, add_constraint).
 mod constraints;
+/// Contextual, selection-tethered direct-manipulation actions (corner fillet/chamfer).
+mod contextual;
+
+pub use contextual::{CornerGeom, CornerAction, CornerKind, fillet_arc};
 
 pub struct AppState {
     pub document: Document,
@@ -54,6 +58,8 @@ pub struct AppState {
     /// mode only), materialized into Coincident constraints when the entity is
     /// created (Stage 3). Each entry is (snapped world x, y, the snapped-to entity).
     pending_snap_links: Vec<(f64, f64, EntityId)>,
+    /// An in-progress contextual corner action (fillet/chamfer being sized visually).
+    pub corner_action: Option<CornerAction>,
 
     /// Path of the currently open file, if any.
     pub current_file_path: Option<std::path::PathBuf>,
@@ -88,6 +94,7 @@ impl AppState {
             entity_points: HashMap::new(),
             origin_id,
             pending_snap_links: Vec::new(),
+            corner_action: None,
 
             current_file_path: None,
         };

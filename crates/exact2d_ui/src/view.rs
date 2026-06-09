@@ -405,7 +405,41 @@ fn canvas(ctx: &Context, app: &mut AppState, ui_state: &mut UiState) {
         // press makes placement instant and drag-tolerant — and matches how CAD
         // tools place points. Select mode keeps `clicked()` so press-and-drag still
         // drives grip editing and rubber-band selection.
-        let place_point = if matches!(app.tool, Tool::Select) {
+        // ── Contextual corner action: fillet/chamfer sized by moving the cursor ──
+        // The selection-tethered, direct-manipulation showcase. Two selected lines
+        // meeting at a corner offer a glass micro-menu right at the vertex; pick
+        // Fillet/Chamfer, then move to size with a live preview, click to apply.
+        let corner_active = app.corner_action.is_some();
+        if corner_active {
+            app.update_corner_size();
+            if response.clicked() { app.apply_corner_action(); }
+            if ui.input(|i| i.key_pressed(egui::Key::Escape)) { app.cancel_corner_action(); }
+        } else if matches!(app.tool, Tool::Select) {
+            if let Some(geom) = app.detect_corner() {
+                let (csx, csy) = app.view.world_to_screen(geom.corner.0, geom.corner.1);
+                let menu_pos = pos2(origin.x + csx as f32 + 16.0, origin.y + csy as f32 - 16.0);
+                let mut begin: Option<crate::state::CornerKind> = None;
+                egui::Area::new(egui::Id::new("corner_menu"))
+                    .fixed_pos(menu_pos)
+                    .order(egui::Order::Foreground)
+                    .show(ctx, |ui| {
+                        corner_glass_frame().show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                if corner_action_button(ui, "⌒  Fillet").clicked() {
+                                    begin = Some(crate::state::CornerKind::Fillet);
+                                }
+                                if corner_action_button(ui, "⟋  Chamfer").clicked() {
+                                    begin = Some(crate::state::CornerKind::Chamfer);
+                                }
+                            });
+                        });
+                    });
+                if let Some(kind) = begin { app.begin_corner_action(geom, kind); }
+            }
+        }
+
+        // While a corner action is active the click was consumed above — don't pick.
+        let place_point = !corner_active && if matches!(app.tool, Tool::Select) {
             response.clicked()
         } else {
             response.contains_pointer() && ui.input(|i| i.pointer.primary_pressed())
@@ -631,6 +665,11 @@ fn canvas(ctx: &Context, app: &mut AppState, ui_state: &mut UiState) {
             };
             let width = if selected { 2.5 } else if hovered { 2.0 } else { 1.5 };
             draw_entity(&painter, app, e, origin, Stroke::new(width, color));
+        }
+
+        // Live preview of an in-progress contextual corner action.
+        if let Some(ca) = app.corner_action {
+            draw_corner_preview(&painter, app, &ca, &to_screen);
         }
 
         // Draw transparent dashed CV polygon for selected splines
@@ -1850,6 +1889,87 @@ fn draw_entity(painter: &egui::Painter, app: &AppState, e: &exact2d_document::En
         EntityKind::Dimension(d) => draw_dimension(painter, app, d, &to_screen, stroke.color),
         _ => {}
     }
+}
+
+// ── Contextual corner micro-menu (glass-lite) + live preview ───────────────────
+
+/// A "glass-lite" floating frame: rounded, translucent, soft shadow, accent edge.
+/// (True backdrop blur isn't available in egui; this is the translucent-shadow
+/// approximation of the glassmorphism look.)
+fn corner_glass_frame() -> egui::Frame {
+    egui::Frame {
+        inner_margin: egui::Margin::symmetric(4.0, 3.0),
+        rounding: egui::Rounding::same(8.0),
+        fill: Color32::from_rgba_unmultiplied(26, 32, 42, 235),
+        stroke: Stroke::new(1.0, Color32::from_rgb(0, 200, 255)),
+        shadow: egui::epaint::Shadow {
+            offset: egui::vec2(0.0, 3.0),
+            blur: 14.0,
+            spread: 0.0,
+            color: Color32::from_black_alpha(130),
+        },
+        outer_margin: egui::Margin::ZERO,
+    }
+}
+
+/// An accent-filled pill button used inside the corner micro-menu.
+fn corner_action_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
+    let text = egui::RichText::new(label).color(Color32::WHITE).size(13.0);
+    ui.add(egui::Button::new(text)
+        .fill(Color32::from_rgb(0, 120, 200))
+        .rounding(6.0))
+}
+
+/// Draw the live fillet/chamfer preview (trimmed edges + arc/bevel) in the accent
+/// colour, plus a sized handle and value label at the cursor.
+fn draw_corner_preview(
+    painter: &egui::Painter,
+    app: &AppState,
+    ca: &crate::state::CornerAction,
+    to_screen: &impl Fn(f64, f64) -> egui::Pos2,
+) {
+    let accent = Color32::from_rgb(0, 220, 255);
+    let stroke = Stroke::new(2.0, accent);
+    let g = &ca.geom;
+    let far_a = (g.corner.0 + g.dir_a.0 * g.len_a, g.corner.1 + g.dir_a.1 * g.len_a);
+    let far_b = (g.corner.0 + g.dir_b.0 * g.len_b, g.corner.1 + g.dir_b.1 * g.len_b);
+    let seg = |p: (f64, f64), q: (f64, f64)| [to_screen(p.0, p.1), to_screen(q.0, q.1)];
+
+    match ca.kind {
+        crate::state::CornerKind::Fillet => {
+            if let Some((p1, p2, c)) = crate::state::fillet_arc(g.corner, g.dir_a, g.dir_b, ca.size) {
+                painter.line_segment(seg(far_a, p1), stroke);
+                painter.line_segment(seg(far_b, p2), stroke);
+                let a1 = (p1.1 - c.1).atan2(p1.0 - c.0);
+                let a2 = (p2.1 - c.1).atan2(p2.0 - c.0);
+                let mut d = a2 - a1;
+                while d > std::f64::consts::PI { d -= std::f64::consts::TAU; }
+                while d < -std::f64::consts::PI { d += std::f64::consts::TAU; }
+                let n = 28;
+                let pts: Vec<_> = (0..=n).map(|i| {
+                    let a = a1 + d * (i as f64 / n as f64);
+                    to_screen(c.0 + ca.size * a.cos(), c.1 + ca.size * a.sin())
+                }).collect();
+                painter.add(egui::Shape::line(pts, stroke));
+            }
+        }
+        crate::state::CornerKind::Chamfer => {
+            let p1 = (g.corner.0 + g.dir_a.0 * ca.size, g.corner.1 + g.dir_a.1 * ca.size);
+            let p2 = (g.corner.0 + g.dir_b.0 * ca.size, g.corner.1 + g.dir_b.1 * ca.size);
+            painter.line_segment(seg(far_a, p1), stroke);
+            painter.line_segment(seg(far_b, p2), stroke);
+            painter.line_segment(seg(p1, p2), stroke);
+        }
+    }
+
+    let cur = to_screen(app.cursor_world.0, app.cursor_world.1);
+    painter.circle_filled(cur, 4.0, accent);
+    let label = match ca.kind {
+        crate::state::CornerKind::Fillet => format!("R {:.2}", ca.size),
+        crate::state::CornerKind::Chamfer => format!("{:.2}", ca.size),
+    };
+    painter.text(pos2(cur.x + 9.0, cur.y - 9.0), egui::Align2::LEFT_BOTTOM, label,
+        egui::FontId::monospace(12.0), accent);
 }
 
 /// Draw a dimension annotation: extension lines, dimension line, arrowheads, and

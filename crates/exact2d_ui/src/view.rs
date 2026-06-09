@@ -388,6 +388,45 @@ fn canvas(ctx: &Context, app: &mut AppState, ui_state: &mut UiState) {
             }
         }
 
+        // ── Marquee box selection (AutoCAD window/crossing) ──
+        // Left-drag on empty space draws a box: left→right = WINDOW (only entities
+        // fully inside, blue solid); right→left = CROSSING (anything touched, green
+        // dashed). Drags that begin on a grip or while the corner grip is active are
+        // left to those interactions.
+        if matches!(app.tool, Tool::Select) {
+            if response.drag_started_by(egui::PointerButton::Primary) && app.corner_action.is_none() {
+                if let Some(p) = response.interact_pointer_pos() {
+                    let on_grip = grips.iter().any(|gr| (p.x - gr.pos.x).hypot(p.y - gr.pos.y) <= 8.0);
+                    if !on_grip {
+                        ctx.data_mut(|d| {
+                            d.insert_temp(egui::Id::new("marquee_start"), p);
+                            d.insert_temp(egui::Id::new("marquee_on"), true);
+                        });
+                    }
+                }
+            }
+            if response.drag_stopped()
+                && ctx.data(|d| d.get_temp::<bool>(egui::Id::new("marquee_on")).unwrap_or(false))
+            {
+                let start: Option<egui::Pos2> = ctx.data(|d| d.get_temp(egui::Id::new("marquee_start")));
+                let end = response.interact_pointer_pos().or_else(|| response.hover_pos());
+                if let (Some(s), Some(e)) = (start, end) {
+                    if (e - s).length() > 3.0 {
+                        let (x0, y0) = app.view.screen_to_world((s.x - origin.x) as f64, (s.y - origin.y) as f64);
+                        let (x1, y1) = app.view.screen_to_world((e.x - origin.x) as f64, (e.y - origin.y) as f64);
+                        let rect = exact2d_geometry::BoundingBox::from_corners(x0, y0, x1, y1);
+                        let sel = if e.x < s.x {
+                            exact2d_cad::select_crossing(&app.document, &rect)
+                        } else {
+                            exact2d_cad::select_window(&app.document, &rect)
+                        };
+                        app.selection = sel.into_iter().filter(|&id| id != app.origin_id).collect();
+                    }
+                }
+                ctx.data_mut(|d| d.insert_temp(egui::Id::new("marquee_on"), false));
+            }
+        }
+
         let mut hovered_grip_idx = None;
         if matches!(app.tool, Tool::Select) {
             if let Some(p) = response.hover_pos() {
@@ -433,7 +472,7 @@ fn canvas(ctx: &Context, app: &mut AppState, ui_state: &mut UiState) {
             let b = (scr(g.corner.0 + g.dir_b.0 * g.len_b, g.corner.1 + g.dir_b.1 * g.len_b) - c).normalized();
             let mut bis = a + b;
             if bis.length() < 1e-3 { bis = egui::vec2(-a.y, a.x); }
-            (g, c + bis.normalized() * 16.0)
+            (g, c + bis.normalized() * 30.0) // sit a little clear of the lines
         });
         let over_dot = corner_dot
             .and_then(|(_, dp)| response.hover_pos().map(|p| (p - dp).length() <= 9.0))
@@ -778,6 +817,32 @@ fn canvas(ctx: &Context, app: &mut AppState, ui_state: &mut UiState) {
                 painter.rect_filled(bg, 6.0, Color32::from_rgba_unmultiplied(26, 32, 42, 235));
                 painter.rect_stroke(bg, 6.0, Stroke::new(1.0, Color32::from_rgb(0, 200, 255)));
                 painter.galley(tp, galley, Color32::WHITE);
+            }
+        }
+
+        // Marquee selection box overlay (blue solid window / green dashed crossing).
+        if ctx.data(|d| d.get_temp::<bool>(egui::Id::new("marquee_on")).unwrap_or(false)) {
+            if let (Some(start), Some(cur)) = (
+                ctx.data(|d| d.get_temp::<egui::Pos2>(egui::Id::new("marquee_start"))),
+                response.hover_pos().or_else(|| response.interact_pointer_pos()),
+            ) {
+                let crossing = cur.x < start.x;
+                let rect = egui::Rect::from_two_pos(start, cur);
+                let (fill, line) = if crossing {
+                    (Color32::from_rgba_unmultiplied(0, 200, 90, 32), Color32::from_rgb(0, 220, 110))
+                } else {
+                    (Color32::from_rgba_unmultiplied(0, 150, 240, 32), Color32::from_rgb(0, 180, 255))
+                };
+                painter.rect_filled(rect, 0.0, fill);
+                if crossing {
+                    let c = [rect.left_top(), rect.right_top(), rect.right_bottom(), rect.left_bottom()];
+                    let st = Stroke::new(1.0, line);
+                    for i in 0..4 {
+                        draw_dashed_line(&painter, c[i], c[(i + 1) % 4], st, 6.0, 4.0);
+                    }
+                } else {
+                    painter.rect_stroke(rect, 0.0, Stroke::new(1.0, line));
+                }
             }
         }
 

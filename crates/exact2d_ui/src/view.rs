@@ -29,6 +29,8 @@ pub struct UiState {
     pub dyn_length: String,
     pub dyn_angle: String,
     pub dyn_active: bool,
+    /// Typed value buffer for the contextual corner fillet/chamfer grip.
+    pub corner_input: String,
 }
 
 /// Build the entire UI for one frame.
@@ -411,36 +413,60 @@ fn canvas(ctx: &Context, app: &mut AppState, ui_state: &mut UiState) {
         // press makes placement instant and drag-tolerant — and matches how CAD
         // tools place points. Select mode keeps `clicked()` so press-and-drag still
         // drives grip editing and rubber-band selection.
-        // ── Contextual corner action: fillet/chamfer sized by moving the cursor ──
-        // The selection-tethered, direct-manipulation showcase. Two selected lines
-        // meeting at a corner offer a glass micro-menu right at the vertex; pick
-        // Fillet/Chamfer, then move to size with a live preview, click to apply.
-        let corner_active = app.corner_action.is_some();
-        if corner_active {
-            app.update_corner_size();
-            if response.clicked() { app.apply_corner_action(); }
-            if ui.input(|i| i.key_pressed(egui::Key::Escape)) { app.cancel_corner_action(); }
-        } else if matches!(app.tool, Tool::Select) {
-            if let Some(geom) = app.detect_corner() {
-                let (csx, csy) = app.view.world_to_screen(geom.corner.0, geom.corner.1);
-                let menu_pos = pos2(origin.x + csx as f32 + 16.0, origin.y + csy as f32 - 16.0);
-                let mut begin: Option<crate::state::CornerKind> = None;
-                egui::Area::new(egui::Id::new("corner_menu"))
-                    .fixed_pos(menu_pos)
-                    .order(egui::Order::Foreground)
-                    .show(ctx, |ui| {
-                        corner_glass_frame().show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                if corner_action_button(ui, "⌒  Fillet").clicked() {
-                                    begin = Some(crate::state::CornerKind::Fillet);
-                                }
-                                if corner_action_button(ui, "⟋  Chamfer").clicked() {
-                                    begin = Some(crate::state::CornerKind::Chamfer);
-                                }
-                            });
-                        });
-                    });
-                if let Some(kind) = begin { app.begin_corner_action(geom, kind); }
+        // ── Contextual corner grip (Inventor-style): a small blue dot sits inside
+        // the corner. Hover for the hint; click and move RIGHT to fillet / LEFT to
+        // chamfer, sized live (or type a value); click again (or Enter) to apply.
+        // The dot/tooltip/preview are painted later; here we just hit-test + drive. ──
+        let corner_geom = if app.corner_action.is_none() && matches!(app.tool, Tool::Select) {
+            app.detect_corner()
+        } else {
+            None
+        };
+        // Dot ~16px into the interior wedge from the vertex.
+        let corner_dot = corner_geom.map(|g| {
+            let scr = |wx: f64, wy: f64| {
+                let (sx, sy) = app.view.world_to_screen(wx, wy);
+                pos2(origin.x + sx as f32, origin.y + sy as f32)
+            };
+            let c = scr(g.corner.0, g.corner.1);
+            let a = (scr(g.corner.0 + g.dir_a.0 * g.len_a, g.corner.1 + g.dir_a.1 * g.len_a) - c).normalized();
+            let b = (scr(g.corner.0 + g.dir_b.0 * g.len_b, g.corner.1 + g.dir_b.1 * g.len_b) - c).normalized();
+            let mut bis = a + b;
+            if bis.length() < 1e-3 { bis = egui::vec2(-a.y, a.x); }
+            (g, c + bis.normalized() * 16.0)
+        });
+        let over_dot = corner_dot
+            .and_then(|(_, dp)| response.hover_pos().map(|p| (p - dp).length() <= 9.0))
+            .unwrap_or(false);
+
+        let corner_busy = app.corner_action.is_some() || over_dot;
+        if app.corner_action.is_some() {
+            app.update_corner_drag(); // direction → fillet/chamfer, distance → size
+            // Optional typed value (digits / '.') overrides the dragged size.
+            let typed: String = ui.input(|i| i.events.iter().filter_map(|e| match e {
+                egui::Event::Text(t) => Some(t.clone()),
+                _ => None,
+            }).collect());
+            for ch in typed.chars() {
+                if ch.is_ascii_digit() || ch == '.' { ui_state.corner_input.push(ch); }
+            }
+            if ui.input(|i| i.key_pressed(egui::Key::Backspace)) { ui_state.corner_input.pop(); }
+            if let Ok(v) = ui_state.corner_input.parse::<f64>() {
+                if v > 0.0 { app.set_corner_size(v); }
+            }
+            let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if response.clicked() || enter {
+                app.apply_corner_action();
+                ui_state.corner_input.clear();
+            }
+            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                app.cancel_corner_action();
+                ui_state.corner_input.clear();
+            }
+        } else if over_dot && response.clicked() {
+            if let Some((g, _)) = corner_dot {
+                app.begin_corner_action(g);
+                ui_state.corner_input.clear();
             }
         }
 
@@ -496,8 +522,8 @@ fn canvas(ctx: &Context, app: &mut AppState, ui_state: &mut UiState) {
             ui_state.dyn_active = false;
         }
 
-        // While a corner action is active the click was consumed above — don't pick.
-        let place_point = !corner_active && if matches!(app.tool, Tool::Select) {
+        // While interacting with the corner grip the click was consumed above — don't pick.
+        let place_point = !corner_busy && if matches!(app.tool, Tool::Select) {
             response.clicked()
         } else {
             response.contains_pointer() && ui.input(|i| i.pointer.primary_pressed())
@@ -735,9 +761,24 @@ fn canvas(ctx: &Context, app: &mut AppState, ui_state: &mut UiState) {
             draw_entity(&painter, app, e, origin, Stroke::new(width, color));
         }
 
-        // Live preview of an in-progress contextual corner action.
+        // Contextual corner grip: the blue dot (idle) or the live fillet/chamfer
+        // preview (while dragging).
         if let Some(ca) = app.corner_action {
             draw_corner_preview(&painter, app, &ca, &to_screen);
+        } else if let Some((_, dp)) = corner_dot {
+            let r = if over_dot { 7.0 } else { 5.0 };
+            painter.circle_filled(dp, r, Color32::from_rgb(0, 150, 255));
+            painter.circle_stroke(dp, r, Stroke::new(1.5, Color32::from_rgb(190, 225, 255)));
+            if over_dot {
+                let txt = "◂ Chamfer    Fillet ▸";
+                let tp = pos2(dp.x + 12.0, dp.y - 22.0);
+                let galley = painter.layout_no_wrap(txt.to_string(),
+                    egui::FontId::proportional(12.0), Color32::WHITE);
+                let bg = egui::Rect::from_min_size(tp, galley.size()).expand(5.0);
+                painter.rect_filled(bg, 6.0, Color32::from_rgba_unmultiplied(26, 32, 42, 235));
+                painter.rect_stroke(bg, 6.0, Stroke::new(1.0, Color32::from_rgb(0, 200, 255)));
+                painter.galley(tp, galley, Color32::WHITE);
+            }
         }
 
         // Draw transparent dashed CV polygon for selected splines
@@ -1980,14 +2021,6 @@ fn corner_glass_frame() -> egui::Frame {
         },
         outer_margin: egui::Margin::ZERO,
     }
-}
-
-/// An accent-filled pill button used inside the corner micro-menu.
-fn corner_action_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
-    let text = egui::RichText::new(label).color(Color32::WHITE).size(13.0);
-    ui.add(egui::Button::new(text)
-        .fill(Color32::from_rgb(0, 120, 200))
-        .rounding(6.0))
 }
 
 /// Draw the live fillet/chamfer preview (trimmed edges + arc/bevel) in the accent

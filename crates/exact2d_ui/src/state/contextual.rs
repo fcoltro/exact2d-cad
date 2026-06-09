@@ -118,18 +118,29 @@ impl AppState {
         Some(CornerGeom { a, b, corner, dir_a, len_a, dir_b, len_b })
     }
 
-    /// Begin a visually-sized corner action with a sensible initial size.
-    pub fn begin_corner_action(&mut self, geom: CornerGeom, kind: CornerKind) {
-        let size = (geom.max_size(kind) * 0.5).max(1e-3);
-        self.corner_action = Some(CornerAction { geom, kind, size });
+    /// Begin a corner action (Inventor-style combined grip). Kind and size are then
+    /// driven by cursor direction/distance via `update_corner_drag`.
+    pub fn begin_corner_action(&mut self, geom: CornerGeom) {
+        let size = (geom.max_size(CornerKind::Fillet) * 0.3).max(1e-3);
+        self.corner_action = Some(CornerAction { geom, kind: CornerKind::Fillet, size });
     }
 
-    /// Update the in-progress size from the cursor's distance to the corner.
-    pub fn update_corner_size(&mut self) {
+    /// Update the in-progress action from the cursor: moving to the **right** of the
+    /// corner chooses Fillet, to the **left** chooses Chamfer; distance sets the size.
+    pub fn update_corner_drag(&mut self) {
         if let Some(mut ca) = self.corner_action {
             let (cx, cy) = ca.geom.corner;
+            ca.kind = if self.cursor_world.0 >= cx { CornerKind::Fillet } else { CornerKind::Chamfer };
             let d = (self.cursor_world.0 - cx).hypot(self.cursor_world.1 - cy);
             ca.size = d.clamp(1e-3, ca.geom.max_size(ca.kind));
+            self.corner_action = Some(ca);
+        }
+    }
+
+    /// Override the in-progress size with a typed value (clamped to what fits).
+    pub fn set_corner_size(&mut self, val: f64) {
+        if let Some(mut ca) = self.corner_action {
+            ca.size = val.clamp(1e-3, ca.geom.max_size(ca.kind));
             self.corner_action = Some(ca);
         }
     }

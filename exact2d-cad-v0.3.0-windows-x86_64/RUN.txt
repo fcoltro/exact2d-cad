@@ -1,0 +1,3 @@
+Exact2D CAD — Windows x86_64 build
+
+Run: double-click exact2d_app.exe (or run it from a terminal with no arguments).

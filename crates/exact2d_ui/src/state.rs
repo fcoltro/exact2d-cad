@@ -507,11 +507,6 @@ impl AppState {
         &self.document.layers.current_layer().name
     }
 
-    pub fn status_flags(&self) -> String {
-        format!("SNAP:{} GRID:{} ORTHO:{}",
-            on_off(self.snap_on), on_off(self.grid_on), on_off(self.ortho_on))
-    }
-
     /// Human-readable name of the active drawing unit for the status bar.
     pub fn units_label(&self) -> &'static str {
         match self.document.settings.units.short_name() {
@@ -528,8 +523,6 @@ impl AppState {
     }
 
 }
-
-fn on_off(b: bool) -> &'static str { if b { "ON" } else { "off" } }
 
 #[allow(dead_code)]
 fn rat(x: f64) -> exact2d_algebra::Rational { exact2d_algebra::Rational::from_f64_approx(x) }

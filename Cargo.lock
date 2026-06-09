@@ -1259,7 +1259,6 @@ dependencies = [
  "exact2d_algebra",
  "exact2d_document",
  "exact2d_geometry",
- "exact2d_spatial",
 ]
 
 [[package]]

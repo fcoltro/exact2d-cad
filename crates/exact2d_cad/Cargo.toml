@@ -9,4 +9,3 @@ edition = "2021"
 exact2d_algebra  = { path = "../exact2d_algebra" }
 exact2d_geometry = { path = "../exact2d_geometry" }
 exact2d_document = { path = "../exact2d_document" }
-exact2d_spatial  = { path = "../exact2d_spatial" }

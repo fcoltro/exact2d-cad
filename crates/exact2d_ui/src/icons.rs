@@ -10,9 +10,9 @@ use egui::{Color32, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2, vec2, pos2};
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Icon {
     Select,
-    Line, Circle, Arc, Rectangle, Polygon, Spline, Polyline, Point, Dimension,
+    Line, Circle, Arc, Rectangle, Polygon, Spline, Polyline,
     Move, Copy, Rotate, Scale, Mirror, Offset, Trim, Extend, Fillet, Chamfer,
-    Stretch, Erase, Array,
+    Stretch, Erase,
 }
 
 const ICON_SIZE: f32 = 30.0;
@@ -116,16 +116,6 @@ impl Icon {
                     p(r, 0.02, 0.85), p(r, 0.35, 0.2), p(r, 0.6, 0.7), p(r, 0.98, 0.1),
                 ], s));
             }
-            Icon::Point => { painter.circle_filled(r.center(), r.width() * 0.12, color); }
-            Icon::Dimension => {
-                // Dimension line with end arrows + extension ticks.
-                let (l, rr, y) = (p(r, 0.1, 0.55), p(r, 0.9, 0.55), 0.55);
-                painter.line_segment([l, rr], s);
-                arrowhead(painter, l, 1.0, 0.0, ah, s);
-                arrowhead(painter, rr, -1.0, 0.0, ah, s);
-                painter.line_segment([p(r, 0.1, 0.15), p(r, 0.1, y + 0.2)], thin);
-                painter.line_segment([p(r, 0.9, 0.15), p(r, 0.9, y + 0.2)], thin);
-            }
             Icon::Move => {
                 let c = r.center();
                 for (dx, dy) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
@@ -206,12 +196,6 @@ impl Icon {
                 painter.rect_stroke(body, 1.0, s);
                 painter.line_segment([p(r, 0.15, 0.45), p(r, 0.7, 0.45)], thin);
                 painter.line_segment([p(r, 0.05, 0.85), p(r, 0.95, 0.85)], s);
-            }
-            Icon::Array => {
-                for (gx, gy) in [(0usize, 0usize), (1, 0), (0, 1), (1, 1)] {
-                    let o = p(r, 0.05 + gx as f32 * 0.5, 0.05 + gy as f32 * 0.5);
-                    painter.rect_stroke(Rect::from_min_size(o, r.size() * 0.4), 0.0, thin);
-                }
             }
         }
     }

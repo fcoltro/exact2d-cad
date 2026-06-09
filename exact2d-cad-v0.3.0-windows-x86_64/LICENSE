@@ -1,0 +1,33 @@
+Exact2D CAD — Proprietary License
+
+Copyright (c) 2026 Fabio Coltro. All Rights Reserved.
+
+This software, including its source code, build artifacts, and documentation
+(collectively, the "Software"), is the confidential and proprietary property of
+Fabio Coltro (the "Author"). The Software is NOT open source.
+
+No license or right is granted to any person or entity to use, copy, modify,
+merge, publish, distribute, sublicense, sell, or create derivative works of the
+Software, in whole or in part, without the prior written permission of the
+Author. Unauthorized copying, distribution, or use of the Software, via any
+medium, is strictly prohibited.
+
+PRIOR RELEASES. Versions of the Software previously published under the GNU
+General Public License v3.0 (notably the public Git history and releases up to
+and including tag v0.2.0) remain available under the terms of that license for
+copies that were already distributed. This Proprietary License governs the
+Software from this point forward and all subsequent versions.
+
+THIRD-PARTY COMPONENTS. The Software incorporates third-party open-source
+libraries that remain subject to their own respective licenses (predominantly
+the MIT and Apache-2.0 licenses). Those components are licensed to you by their
+respective authors under those terms; nothing in this license alters them.
+
+NO WARRANTY. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO
+EVENT SHALL THE AUTHOR BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY,
+WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+For licensing inquiries, contact the Author.

@@ -1,5 +1,4 @@
 use exact2d_algebra::Rational;
-use crate::point::Point2d;
 use crate::curve::{Curve, CurveSegment};
 use crate::primitives::{LineSeg, CircularArc};
 
@@ -196,28 +195,6 @@ pub fn intersect_circle_circle(c1: &CircularArc, c2: &CircularArc) -> Vec<CurveI
         }
     }
     results
-}
-
-/// Construct two distinct points on the line `a·x + b·y + c = 0`.
-/// Useful for turning an implicit line equation back into a `LineSeg`.
-pub fn two_points_on_line(a: &Rational, b: &Rational, c: &Rational) -> (Point2d, Point2d) {
-    // ax + by + c = 0 — pick two convenient points
-    if !b.is_zero() {
-        // x=0 → y = -c/b; x=1 → y = -(a+c)/b
-        let y0 = -(c.clone()) / b.clone();
-        let y1 = -(a.clone() + c.clone()) / b.clone();
-        (
-            Point2d { x: Rational::zero(), y: y0 },
-            Point2d { x: Rational::one(),  y: y1 },
-        )
-    } else {
-        // Vertical line x = -c/a
-        let x0 = -(c.clone()) / a.clone();
-        (
-            Point2d { x: x0.clone(), y: Rational::zero() },
-            Point2d { x: x0,         y: Rational::one() },
-        )
-    }
 }
 
 // ── General intersection via resultant ───────────────────────────────────────
@@ -440,6 +417,7 @@ pub fn intersect_numeric(c1: &Curve, c2: &Curve) -> Vec<CurveIntersection> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::point::Point2d;
     use crate::primitives::LineSeg;
 
     fn r(n: i64) -> Rational { Rational::from(n) }

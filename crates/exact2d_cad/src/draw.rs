@@ -12,14 +12,6 @@ pub fn line(doc: &mut Document, a: Point2d, b: Point2d) -> EntityId {
     doc.add(EntityKind::Curve(Curve::Line(LineSeg::from_endpoints(a, b))))
 }
 
-/// LINE (multi): connected segments through a sequence of points.
-/// Returns one entity id per segment.
-pub fn polyline_open(doc: &mut Document, points: &[Point2d]) -> Vec<EntityId> {
-    points.windows(2)
-        .map(|w| line(doc, w[0].clone(), w[1].clone()))
-        .collect()
-}
-
 /// CIRCLE: center + radius (full circle).
 pub fn circle(doc: &mut Document, center: Point2d, radius: Rational) -> EntityId {
     let arc = CircularArc::new(center, radius, 0.0, 2.0 * std::f64::consts::PI);

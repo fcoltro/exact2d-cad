@@ -160,7 +160,6 @@ impl AppState {
                         &mut self.document, ca.geom.a, ca.geom.b, ca.size, ca.size);
                 }
             }
-            self.resync_after_edit();
             self.selection.clear();
         }
     }

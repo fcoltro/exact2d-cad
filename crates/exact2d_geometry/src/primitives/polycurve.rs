@@ -2,42 +2,18 @@ use exact2d_algebra::BivariatePoly;
 use crate::point::BoundingBox;
 use crate::curve::{Curve, CurveSegment};
 
-/// Geometric continuity between successive segments.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Continuity {
-    /// G0 — endpoints match (position continuity).
-    G0,
-    /// G1 — endpoints match AND tangent directions are parallel (no speed requirement).
-    G1,
-    /// G2 — G1 plus matching curvature.
-    G2,
-}
-
 /// A compound curve: an ordered sequence of curve segments joined end-to-end.
 ///
-/// Successive segments share an endpoint (G0 minimum), and continuity is tracked.
+/// Successive segments share an endpoint (G0 minimum).
 #[derive(Clone, Debug)]
 pub struct PolyCurve {
     pub segments: Vec<Curve>,
-    /// `continuity[i]` describes the join between `segments[i]` and `segments[i+1]`.
-    pub continuity: Vec<Continuity>,
 }
 
 impl PolyCurve {
     pub fn new(segments: Vec<Curve>) -> Self {
-        let n = segments.len().saturating_sub(1);
-        PolyCurve {
-            segments,
-            continuity: vec![Continuity::G0; n],
-        }
+        PolyCurve { segments }
     }
-
-    pub fn with_continuity(segments: Vec<Curve>, continuity: Vec<Continuity>) -> Self {
-        assert!(continuity.len() + 1 == segments.len() || segments.is_empty());
-        PolyCurve { segments, continuity }
-    }
-
-    // ── Continuity validation ─────────────────────────────────────────────────
 
     /// Check G0 continuity: end of segment i ≈ start of segment i+1.
     pub fn check_g0(&self, tol: f64) -> bool {
@@ -50,66 +26,6 @@ impl PolyCurve {
             if d > tol { return false; }
         }
         true
-    }
-
-    /// Check G1 continuity: G0 + tangent directions parallel at each join.
-    pub fn check_g1(&self, tol: f64) -> bool {
-        if !self.check_g0(tol) { return false; }
-        for i in 0..self.segments.len().saturating_sub(1) {
-            let (_, t1) = self.segments[i].domain();
-            let (t0, _) = self.segments[i + 1].domain();
-            let (tx0, ty0) = self.segments[i].tangent_f64(t1);
-            let (tx1, ty1) = self.segments[i + 1].tangent_f64(t0);
-            // Parallel check: cross product ≈ 0
-            let cross = tx0 * ty1 - ty0 * tx1;
-            let len0 = (tx0 * tx0 + ty0 * ty0).sqrt().max(1e-15);
-            let len1 = (tx1 * tx1 + ty1 * ty1).sqrt().max(1e-15);
-            if cross.abs() / (len0 * len1) > tol { return false; }
-        }
-        true
-    }
-
-    /// Check G2 continuity: G1 + curvature match at each join.
-    pub fn check_g2(&self, tol: f64) -> bool {
-        if !self.check_g1(tol) { return false; }
-        for i in 0..self.segments.len().saturating_sub(1) {
-            let (_, t1) = self.segments[i].domain();
-            let (t0, _) = self.segments[i + 1].domain();
-            let k0 = curvature_f64(&self.segments[i], t1);
-            let k1 = curvature_f64(&self.segments[i + 1], t0);
-            if (k0 - k1).abs() > tol { return false; }
-        }
-        true
-    }
-
-    /// Classify all joins and update `self.continuity`.
-    pub fn classify_continuity(&mut self, tol: f64) {
-        for i in 0..self.segments.len().saturating_sub(1) {
-            self.continuity[i] = {
-                let (_, t1) = self.segments[i].domain();
-                let (t0, _) = self.segments[i + 1].domain();
-                let (ex, ey) = self.segments[i].evaluate_f64(t1);
-                let (sx, sy) = self.segments[i + 1].evaluate_f64(t0);
-                let d = ((ex - sx).powi(2) + (ey - sy).powi(2)).sqrt();
-                if d > tol {
-                    // not even G0 — leave as G0 but the check_g0 will return false
-                    Continuity::G0
-                } else {
-                    let (tx0, ty0) = self.segments[i].tangent_f64(t1);
-                    let (tx1, ty1) = self.segments[i + 1].tangent_f64(t0);
-                    let cross = (tx0 * ty1 - ty0 * tx1).abs();
-                    let len0 = (tx0 * tx0 + ty0 * ty0).sqrt().max(1e-15);
-                    let len1 = (tx1 * tx1 + ty1 * ty1).sqrt().max(1e-15);
-                    if cross / (len0 * len1) > tol {
-                        Continuity::G0
-                    } else {
-                        let k0 = curvature_f64(&self.segments[i], t1);
-                        let k1 = curvature_f64(&self.segments[i + 1], t0);
-                        if (k0 - k1).abs() > tol { Continuity::G1 } else { Continuity::G2 }
-                    }
-                }
-            };
-        }
     }
 
     // ── Merging ────────────────────────────────────────────────────────────────
@@ -153,23 +69,6 @@ impl PolyCurve {
         }
         PolyCurve::new(result)
     }
-}
-
-/// Signed curvature of any curve at parameter t (numerical).
-fn curvature_f64(curve: &Curve, t: f64) -> f64 {
-    let eps = 1e-6;
-    let t1 = (t - eps).max(curve.domain().0);
-    let t2 = (t + eps).min(curve.domain().1);
-    let (x1, y1) = curve.evaluate_f64(t1);
-    let (x0, y0) = curve.evaluate_f64(t);
-    let (x2, y2) = curve.evaluate_f64(t2);
-    let dx1 = x0 - x1;
-    let dy1 = y0 - y1;
-    let dx2 = x2 - x0;
-    let dy2 = y2 - y0;
-    let cross = dx1 * dy2 - dy1 * dx2;
-    let len = (dx1 * dx1 + dy1 * dy1).sqrt();
-    if len < 1e-15 { 0.0 } else { cross / (len * len * len) }
 }
 
 // ── CurveSegment impl ─────────────────────────────────────────────────────────

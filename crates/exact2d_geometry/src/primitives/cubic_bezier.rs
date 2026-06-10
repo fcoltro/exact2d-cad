@@ -122,38 +122,6 @@ impl CubicBezier {
         [&self.p0, &self.p1, &self.p2, &self.p3]
     }
 
-    /// Inflection points: parameters where signed curvature changes sign.
-    /// Returned as a (possibly empty) Vec of f64 parameters in (0, 1).
-    pub fn inflection_points(&self) -> Vec<f64> {
-        // The inflection condition: B'(t) × B''(t) = 0 (cross product in 2D = determinant)
-        // Let x'=dx/dt, y'=dy/dt, x''=d²x/dt², y''=d²y/dt²
-        // Inflection: x' * y'' - y' * x'' = 0  (a cubic polynomial in t in general)
-        let xp = self.x_poly().derivative();
-        let yp = self.y_poly().derivative();
-        let xpp = xp.derivative();
-        let ypp = yp.derivative();
-        // cross = xp * ypp - yp * xpp
-        let cross = xp.clone() * ypp.clone() - yp.clone() * xpp.clone();
-        cross.real_roots_f64(1e-10)
-            .into_iter()
-            .filter(|&t| t > 1e-10 && t < 1.0 - 1e-10)
-            .collect()
-    }
-
-    /// Signed curvature at float parameter t.
-    pub fn curvature_at_f64(&self, t: f64) -> f64 {
-        let (xp, yp)   = self.tangent_f64(t);
-        let (xpp, ypp) = self.second_derivative_f64(t);
-        let speed_sq = xp * xp + yp * yp;
-        let cross = xp * ypp - yp * xpp;
-        cross / speed_sq.powf(1.5)
-    }
-
-    fn second_derivative_f64(&self, t: f64) -> (f64, f64) {
-        let xpp = self.x_poly().derivative().derivative();
-        let ypp = self.y_poly().derivative().derivative();
-        (xpp.eval_f64(t), ypp.eval_f64(t))
-    }
 }
 
 // ── CurveSegment impl ─────────────────────────────────────────────────────────

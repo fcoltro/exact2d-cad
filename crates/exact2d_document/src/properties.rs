@@ -81,9 +81,6 @@ impl LineTypeDef {
     pub fn center() -> Self {
         LineTypeDef { name: "Center".into(), description: "____ _ ____".into(), pattern: vec![1.0, -0.25, 0.25, -0.25] }
     }
-    pub fn pattern_length(&self) -> f64 {
-        self.pattern.iter().map(|p| p.abs()).sum()
-    }
 }
 
 /// Custom application data attached to an entity (XData, spec §4.1).

@@ -66,10 +66,6 @@ pub enum Curve {
 
 impl Curve {
     pub fn as_line(&self)    -> Option<&LineSeg>       { if let Curve::Line(v)    = self { Some(v) } else { None } }
-    pub fn as_arc(&self)     -> Option<&CircularArc>   { if let Curve::Arc(v)     = self { Some(v) } else { None } }
-    pub fn as_ellipse(&self) -> Option<&EllipticalArc> { if let Curve::Ellipse(v) = self { Some(v) } else { None } }
-    pub fn as_bezier(&self)  -> Option<&CubicBezier>   { if let Curve::Bezier(v)  = self { Some(v) } else { None } }
-    pub fn as_poly(&self)    -> Option<&PolyCurve>     { if let Curve::Poly(v)    = self { Some(v) } else { None } }
 }
 
 /// Dispatch CurveSegment to each variant.

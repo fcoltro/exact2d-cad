@@ -56,11 +56,6 @@ impl Transform2d {
         Self::scale(Rational::one(), Rational::minus_one())
     }
 
-    /// Mirror across the y-axis (x → −x) — exact.
-    pub fn mirror_y() -> Self {
-        Self::scale(Rational::minus_one(), Rational::one())
-    }
-
     /// Mirror across the line through two points — exact.
     /// Reflection matrix for a line with direction (dx, dy):
     ///   R = 1/(dx²+dy²) · [[dx²−dy², 2·dx·dy], [2·dx·dy, dy²−dx²]]

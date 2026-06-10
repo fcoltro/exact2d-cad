@@ -6,7 +6,7 @@ pub mod transform;
 
 pub use point::{Point2d, BoundingBox};
 pub use curve::{Curve, CurveSegment};
-pub use primitives::{LineSeg, CircularArc, EllipticalArc, CubicBezier, PolyCurve, Continuity};
+pub use primitives::{LineSeg, CircularArc, EllipticalArc, CubicBezier, PolyCurve};
 pub use transform::Transform2d;
 pub use ops::{
     intersect, intersect_numeric, CurveIntersection,

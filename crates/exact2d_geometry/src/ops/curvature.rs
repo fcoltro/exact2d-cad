@@ -6,24 +6,10 @@ pub fn tangent_at(curve: &Curve, t: f64) -> (f64, f64) {
     curve.tangent_f64(t)
 }
 
-/// Unit tangent at parameter t.
-pub fn unit_tangent_at(curve: &Curve, t: f64) -> (f64, f64) {
-    let (tx, ty) = curve.tangent_f64(t);
-    let len = (tx * tx + ty * ty).sqrt().max(1e-20);
-    (tx / len, ty / len)
-}
-
 /// Normal direction (90° CCW from tangent, unnormalized).
 pub fn normal_at(curve: &Curve, t: f64) -> (f64, f64) {
     let (tx, ty) = curve.tangent_f64(t);
     (-ty, tx)
-}
-
-/// Unit normal (CCW) at parameter t.
-pub fn unit_normal_at(curve: &Curve, t: f64) -> (f64, f64) {
-    let (nx, ny) = normal_at(curve, t);
-    let len = (nx * nx + ny * ny).sqrt().max(1e-20);
-    (nx / len, ny / len)
 }
 
 /// Signed curvature κ at a world point (px, py) on an implicit curve f(x,y)=0.

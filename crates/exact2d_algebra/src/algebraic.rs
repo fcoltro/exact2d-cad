@@ -85,15 +85,6 @@ impl AlgebraicNumber {
         }
     }
 
-    /// Refine until the interval width is less than `target_width` (Rational).
-    pub fn refine_to_width(&mut self, target_width: &Rational) {
-        loop {
-            let width = self.upper.clone() - self.lower.clone();
-            if &width <= target_width { break; }
-            self.refine(1);
-        }
-    }
-
     pub fn compare(&self, other: &Self) -> Ordering {
         let mut a = self.clone();
         let mut b = other.clone();

@@ -80,9 +80,6 @@ impl BoundingBox {
         }
     }
 
-    pub fn width_f64(&self)  -> f64 { (self.max.x.clone() - self.min.x.clone()).to_f64() }
-    pub fn height_f64(&self) -> f64 { (self.max.y.clone() - self.min.y.clone()).to_f64() }
-
     pub fn contains_point_f64(&self, x: f64, y: f64) -> bool {
         let (x0, y0) = self.min.to_f64();
         let (x1, y1) = self.max.to_f64();
@@ -109,14 +106,6 @@ impl BoundingBox {
         }
     }
 
-    /// Expand by a float margin on all sides.
-    pub fn expand_f64(&self, margin: f64) -> BoundingBox {
-        let m = Rational::from_f64_approx(margin);
-        BoundingBox {
-            min: Point2d { x: self.min.x.clone() - m.clone(), y: self.min.y.clone() - m.clone() },
-            max: Point2d { x: self.max.x.clone() + m.clone(), y: self.max.y.clone() + m },
-        }
-    }
 }
 
 impl std::fmt::Display for BoundingBox {

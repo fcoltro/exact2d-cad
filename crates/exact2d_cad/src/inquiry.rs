@@ -69,16 +69,6 @@ pub fn list_entity(doc: &Document, id: EntityId) -> Option<String> {
     Some(format!("[{}] layer={}  {}", id.0, layer_name, geom))
 }
 
-/// ID: the coordinates of a point query (returns exact point if it's a node).
-pub fn id_point(doc: &Document, id: EntityId) -> Option<Point2d> {
-    match &doc.get(id)?.kind {
-        EntityKind::Point(p) => Some(p.clone()),
-        EntityKind::Curve(Curve::Line(l)) => Some(l.p0.clone()),
-        EntityKind::Curve(Curve::Arc(a)) => Some(a.center.clone()),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

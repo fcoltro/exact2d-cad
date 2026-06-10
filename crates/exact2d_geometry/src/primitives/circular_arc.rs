@@ -89,40 +89,6 @@ impl CircularArc {
         Some(CircularArc { center, radius, start_angle, end_angle })
     }
 
-    /// Arc from two endpoints with given radius.
-    /// `large_arc` selects the major arc (angle > π) when true.
-    /// Returns `None` if the distance between points > 2r.
-    pub fn from_endpoints_radius(
-        p_start: &Point2d, p_end: &Point2d,
-        radius: Rational,
-        large_arc: bool,
-        clockwise: bool,
-    ) -> Option<Self> {
-        let r = radius.to_f64();
-        let (x1, y1) = p_start.to_f64();
-        let (x2, y2) = p_end.to_f64();
-        let dx = x2 - x1;
-        let dy = y2 - y1;
-        let d = (dx * dx + dy * dy).sqrt();
-        if d > 2.0 * r { return None; }
-
-        let mx = (x1 + x2) / 2.0;
-        let my = (y1 + y2) / 2.0;
-        let h = (r * r - (d / 2.0).powi(2)).sqrt();
-        let nx = -dy / d;
-        let ny = dx / d;
-
-        let sign = if large_arc == clockwise { 1.0 } else { -1.0 };
-        let cx = mx + sign * h * nx;
-        let cy = my + sign * h * ny;
-
-        let center = Point2d::from_f64(cx, cy);
-        let start_angle = (y1 - cy).atan2(x1 - cx);
-        let end_angle   = (y2 - cy).atan2(x2 - cx);
-
-        Some(CircularArc { center, radius, start_angle, end_angle })
-    }
-
     // ── Properties ────────────────────────────────────────────────────────────
 
     /// Start point.
@@ -143,28 +109,12 @@ impl CircularArc {
         a
     }
 
-    /// Chord length: distance between start and end points.
-    pub fn chord_length(&self) -> f64 {
-        let r = self.radius.to_f64();
-        let theta = self.included_angle();
-        2.0 * r * (theta / 2.0).sin()
-    }
-
     /// Sagitta: the height from the chord to the arc midpoint.
     pub fn sagitta(&self) -> f64 {
         let r = self.radius.to_f64();
         r - r * (self.included_angle() / 2.0).cos()
     }
 
-    /// DXF bulge factor: tan(θ/4) where θ is the included angle (signed: + CCW, − CW).
-    pub fn bulge_factor(&self) -> f64 {
-        (self.included_angle() / 4.0).tan()
-    }
-
-    /// Tangent direction at angle `t` (CCW parametric, normalized).
-    pub fn tangent_at_angle(&self, t: f64) -> (f64, f64) {
-        (-t.sin(), t.cos())
-    }
 }
 
 // ── CurveSegment impl ─────────────────────────────────────────────────────────

@@ -10,10 +10,6 @@ use exact2d_cad::pick_at;
 use crate::tools::Tool;
 
 impl AppState {
-    /// Post-edit hook. (Previously resynced the parametric sketch; now a no-op,
-    /// kept as the single place to re-add any post-modify housekeeping.)
-    pub(crate) fn resync_after_edit(&mut self) {}
-
     /// Handle a click for the entity-picking modify tools. Returns true if the click
     /// was consumed (so `canvas_click` should stop). These tools need document access
     /// for picking and the kernel edit ops, so they live here rather than in `Tool`.
@@ -32,7 +28,6 @@ impl AppState {
                         .filter(|&i| i != id && i != self.origin_id).collect();
                     edit::trim(&mut self.document, id, &cutters, px, py);
                     self.selection.clear();
-                    self.resync_after_edit();
                 }
                 true
             }
@@ -50,7 +45,7 @@ impl AppState {
                     for (_, bid) in bs {
                         if edit::extend(&mut self.document, id, bid, px, py) { done = true; break; }
                     }
-                    if done { self.resync_after_edit(); } else { self.history.discard_last(); }
+                    if !done { self.history.discard_last(); }
                 }
                 true
             }
@@ -71,7 +66,6 @@ impl AppState {
                             let signed = if dp <= dm { dist.abs() } else { -dist.abs() };
                             self.history.snapshot(&self.document);
                             edit::offset(&mut self.document, &[src], signed);
-                            self.resync_after_edit();
                         }
                         self.tool = Tool::Offset { dist, source: None };
                     }
@@ -86,7 +80,6 @@ impl AppState {
                             if a != id {
                                 self.history.snapshot(&self.document);
                                 edit::fillet(&mut self.document, a, id, radius, px, py);
-                                self.resync_after_edit();
                             }
                             self.tool = Tool::Fillet { radius, first: None };
                         }
@@ -102,7 +95,6 @@ impl AppState {
                             if a != id {
                                 self.history.snapshot(&self.document);
                                 edit::chamfer(&mut self.document, a, id, dist, dist);
-                                self.resync_after_edit();
                             }
                             self.tool = Tool::Chamfer { dist, first: None };
                         }
@@ -130,7 +122,6 @@ impl AppState {
                         let dy = py - bp.y.to_f64();
                         self.history.snapshot(&self.document);
                         edit::stretch(&mut self.document, &ids, window, dx, dy);
-                        self.resync_after_edit();
                         self.tool = Tool::Stretch { c1: None, c2: None, base: None, ids: vec![] };
                     }
                 }

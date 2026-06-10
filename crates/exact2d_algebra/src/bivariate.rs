@@ -123,16 +123,6 @@ impl BivariatePoly {
         result
     }
 
-    /// Substitute x = val (rational) → univariate polynomial in y.
-    pub fn substitute_x(&self, val: &Rational) -> UnivariatePoly {
-        let m = self.y_degree() as usize;
-        let mut coeffs = vec![Rational::zero(); m + 1];
-        for (&(xi, yi), coeff) in &self.terms {
-            coeffs[yi as usize] = coeffs[yi as usize].clone() + coeff.clone() * val.pow_u32(xi);
-        }
-        UnivariatePoly::from_coeffs(coeffs)
-    }
-
     // ── Resultant (Sylvester matrix) ──────────────────────────────────────────
 
     /// Compute resultant of `self` and `other` with respect to x.
@@ -281,11 +271,6 @@ impl BivariatePoly {
     /// Returns a univariate polynomial in y (or a rational if f is univariate in x).
     pub fn discriminant_wrt_x(&self) -> UnivariatePoly {
         self.resultant_wrt_x(&self.partial_x())
-    }
-
-    /// Discriminant of `self` with respect to y: res_y(f, ∂f/∂y).
-    pub fn discriminant_wrt_y(&self) -> UnivariatePoly {
-        self.resultant_wrt_y(&self.partial_y())
     }
 
     // ── Total degree & term iterator ──────────────────────────────────────────

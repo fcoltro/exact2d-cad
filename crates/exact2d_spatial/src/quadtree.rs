@@ -179,17 +179,6 @@ impl Quadtree {
         None
     }
 
-    /// Ray casting: traverse cells along a horizontal ray from (px, py) rightward.
-    /// Returns the curve indices of all cells the ray passes through.
-    pub fn ray_cast_horizontal(&self, px: f64, py: f64) -> Vec<usize> {
-        let ray_bb = BoundingBox::from_corners(
-            px, py - 1e-9,
-            self.root.bounds.max.x.to_f64(),
-            py + 1e-9,
-        );
-        self.query_rect(&ray_bb)
-    }
-
     /// Nearest-neighbour: return the index of the curve nearest to (px, py)
     /// by checking curves in the cell containing the point and expanding outward.
     pub fn nearest_curve(&self, px: f64, py: f64) -> Option<usize> {

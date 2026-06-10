@@ -19,18 +19,6 @@ impl LineSeg {
         LineSeg { p0, p1 }
     }
 
-    /// From a starting point, a direction (dx, dy) (need not be unit), and a scalar length.
-    /// The endpoint is p0 + (len/|(dx,dy)|)*(dx,dy).  For exact arithmetic, caller must
-    /// supply the direction as a Rational pair and len² must match dx²+dy² (no irrational).
-    /// If the direction is already unit-length in terms of Rationals, set len = 1.
-    pub fn from_point_dir(p0: Point2d, dx: Rational, dy: Rational) -> Self {
-        let p1 = Point2d {
-            x: p0.x.clone() + dx,
-            y: p0.y.clone() + dy,
-        };
-        LineSeg { p0, p1 }
-    }
-
     // ── Implicit form ─────────────────────────────────────────────────────────
 
     /// Returns the coefficients (a, b, c) for ax + by + c = 0.

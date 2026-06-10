@@ -524,13 +524,12 @@ impl AppState {
 
 }
 
-#[allow(dead_code)]
-fn rat(x: f64) -> exact2d_algebra::Rational { exact2d_algebra::Rational::from_f64_approx(x) }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use exact2d_geometry::{Curve, LineSeg};
+
+    fn rat(x: f64) -> exact2d_algebra::Rational { exact2d_algebra::Rational::from_f64_approx(x) }
 
     fn pt(x: i64, y: i64) -> Point2d { Point2d::from_i64(x, y) }
 

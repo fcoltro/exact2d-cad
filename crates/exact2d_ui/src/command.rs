@@ -136,7 +136,6 @@ pub fn parse_command(input: &str) -> Command {
         "ALL"                   => Command::SelectAll,
         "ZOOM" | "Z"            => parse_zoom(&rest),
         "LAYER" | "LA"          => parse_layer(&rest),
-        // Parametric constraints (CON …) are hidden for now — revisit later.
         _                       => Command::Unknown(trimmed.to_string()),
     }
 }
@@ -192,13 +191,6 @@ mod tests {
     fn parses_layer() {
         assert!(matches!(parse_command("LAYER SET walls"), Command::LayerSet(n) if n == "walls"));
         assert!(matches!(parse_command("la new hidden"), Command::LayerNew(n) if n == "hidden"));
-    }
-
-    #[test]
-    fn constraint_commands_are_disabled_for_now() {
-        // Parametric is hidden; CON … no longer maps to constraint commands.
-        assert!(matches!(parse_command("CON H"), Command::Unknown(_)));
-        assert!(matches!(parse_command("CONSTRAINTS"), Command::Unknown(_)));
     }
 
     #[test]

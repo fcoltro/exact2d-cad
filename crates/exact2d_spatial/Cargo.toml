@@ -2,9 +2,8 @@
 # Proprietary, all rights reserved — never publish to crates.io.
 publish = false
 name = "exact2d_spatial"
-version = "0.1.0"
+version = "0.3.2"
 edition = "2021"
 
 [dependencies]
 exact2d_geometry = { path = "../exact2d_geometry" }
-exact2d_algebra  = { path = "../exact2d_algebra" }

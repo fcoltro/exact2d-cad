@@ -18,7 +18,6 @@ and only flattened to pixels for display.
 | `exact2d_boolean` | Planar region boolean operations |
 | `exact2d_document` | Document / layer / entity / block model |
 | `exact2d_cad` | Snapping, selection, draw + edit (trim/extend/fillet/chamfer/offset/…) |
-| `exact2d_constraint` | Parametric constraint solver (Gauss–Newton + DOF tracking) |
 | `exact2d_io` | DXF, SVG, and native `.e2d` import/export (zero-loss rationals) |
 | `exact2d_ui` | Headless app logic + egui view (icon ribbon, canvas, panels) |
 | `apps/exact2d_app` | eframe GUI host + headless kernel demo |
@@ -39,8 +38,8 @@ tessellation — exactness lives in the kernel, not the rasterizer.
 ## Status
 
 Implemented: the algebraic kernel, geometry engine, spatial index, boolean ops,
-document model, snapping/selection, the full draw + modify toolset, a parametric
-constraint solver, DXF/SVG/native I/O, and an egui application shell.
+document model, snapping/selection, the full draw + modify toolset,
+DXF/SVG/native I/O, and an egui application shell.
 
 ## License
 

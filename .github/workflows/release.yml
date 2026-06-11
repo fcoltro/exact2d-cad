@@ -40,6 +40,7 @@ jobs:
         run: cargo build --release -p exact2d_app
 
       - name: Package
+        id: pkg
         run: |
           set -eu
           VERSION="${GITHUB_REF_NAME:-manual}"
@@ -64,19 +65,19 @@ jobs:
           recent distro (Ubuntu 22.04+, Debian 12+, Fedora 36+, or newer).
           EOF
           tar czf "${STAGE}.tar.gz" "$STAGE"
-          echo "ASSET=${STAGE}.tar.gz" >> "$GITHUB_ENV"
+          echo "asset=${STAGE}.tar.gz" >> "$GITHUB_OUTPUT"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.ASSET }}
-          path: ${{ env.ASSET }}
+          name: ${{ steps.pkg.outputs.asset }}
+          path: ${{ steps.pkg.outputs.asset }}
 
       - name: Publish GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ env.ASSET }}
+          files: ${{ steps.pkg.outputs.asset }}
           generate_release_notes: true
 
   build-windows:
@@ -101,6 +102,7 @@ jobs:
         run: cargo build --release -p exact2d_app
 
       - name: Package
+        id: pkg
         shell: pwsh
         run: |
           $version = if ($env:GITHUB_REF_NAME) { $env:GITHUB_REF_NAME } else { 'manual' }
@@ -118,17 +120,17 @@ jobs:
           code-signed).
           "@ | Set-Content "$stage\RUN.txt" -Encoding utf8
           Compress-Archive -Path $stage -DestinationPath "$stage.zip"
-          "ASSET=$stage.zip" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "asset=$stage.zip" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.ASSET }}
-          path: ${{ env.ASSET }}
+          name: ${{ steps.pkg.outputs.asset }}
+          path: ${{ steps.pkg.outputs.asset }}
 
       - name: Publish GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ env.ASSET }}
+          files: ${{ steps.pkg.outputs.asset }}
           generate_release_notes: true

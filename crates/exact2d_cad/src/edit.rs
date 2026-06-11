@@ -2,7 +2,7 @@
 //! TRIM, BREAK, ARRAY. All transforms are exact where the geometry permits.
 
 use exact2d_algebra::Rational;
-use exact2d_geometry::{Curve, CurveSegment, Point2d, Transform2d, LineSeg, CircularArc, offset_curve, intersect, split_curve};
+use exact2d_geometry::{Curve, CurveSegment, Point2d, Transform2d, LineSeg, CircularArc, offset_curve, intersect_numeric, split_curve};
 use exact2d_document::{Document, EntityId, EntityKind};
 
 // ── Public commands ────────────────────────────────────────────────────────────
@@ -108,10 +108,16 @@ pub fn trim(doc: &mut Document, target: EntityId, cutters: &[EntityId], px: f64,
     let (t0, t1) = curve.domain();
     let span = t1 - t0;
     let mut params: Vec<f64> = vec![0.0, 1.0];
+    // Interactive op: the split parameters below are f64 anyway, so use the fast
+    // numeric intersector — the exact symbolic kernel froze the UI for seconds on
+    // Bézier cutters (same lesson as the snapping freeze). A bbox pre-filter
+    // skips cutters that cannot touch the target at all.
+    let target_bb = curve.bounding_box();
     for &cid in cutters {
         if cid == target { continue; }
         if let Some(cc) = doc.get(cid).and_then(|e| e.as_curve()) {
-            for hit in intersect(&curve, cc) {
+            if !target_bb.intersects(&cc.bounding_box()) { continue; }
+            for hit in intersect_numeric(&curve, cc) {
                 let tn = (hit.t1 - t0) / span;
                 if tn > 1e-6 && tn < 1.0 - 1e-6 { params.push(tn); }
             }
@@ -606,6 +612,24 @@ mod tests {
 
     fn pt(x: i64, y: i64) -> Point2d { Point2d::from_i64(x, y) }
     fn r(n: i64) -> Rational { Rational::from(n) }
+
+    /// Regression: trimming against Bézier cutters must use the fast numeric
+    /// intersector. The exact symbolic kernel took ~seconds per spline pair and
+    /// froze the UI on click (same root cause as the old snapping freeze).
+    #[test]
+    fn trim_with_bezier_cutters_is_fast_and_correct() {
+        let mut doc = Document::new();
+        // Horizontal target line, each spline crossing it exactly once.
+        let target = draw::line(&mut doc, pt(0, 0), pt(10, 0));
+        let c1 = draw::bezier(&mut doc, pt(2, -3), pt(2, -1), pt(3, 1), pt(3, 3));
+        let c2 = draw::bezier(&mut doc, pt(7, -3), pt(7, -1), pt(8, 1), pt(8, 3));
+        let start = std::time::Instant::now();
+        // Pick the middle (x≈5): keep the two outer pieces.
+        let survivors = trim(&mut doc, target, &[c1, c2], 5.0, 0.0);
+        assert!(start.elapsed().as_millis() < 500,
+            "trim took {:?} — exact kernel is back in the interactive path?", start.elapsed());
+        assert_eq!(survivors.len(), 2);
+    }
 
     #[test]
     fn move_translates() {

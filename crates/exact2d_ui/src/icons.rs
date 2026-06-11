@@ -1,7 +1,10 @@
 //! Vector tool icons drawn directly with the egui painter.
 //!
-//! No font glyphs or image assets are used — each icon is a few strokes laid out in
-//! a unit box, so they stay crisp at any DPI and match the vector-CAD aesthetic.
+//! No font glyphs or image assets are used — each icon is an SVG-like path laid
+//! out in a unit box, so they stay crisp at any DPI and match the vector-CAD
+//! aesthetic. The designs follow the conventions users already know from
+//! AutoCAD/Fusion (node squares on defining points, dashed construction
+//! geometry) and Lucide/Feather (eye, magnifier, undo arrows).
 //! `icon_button` renders one in a fixed-size, toggle-style button with a tooltip.
 
 use egui::{Color32, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2, vec2, pos2};
@@ -10,9 +13,12 @@ use egui::{Color32, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2, vec2, pos2};
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Icon {
     Select,
-    Line, Circle, Arc, Rectangle, Polygon, Spline, Polyline,
+    Line, Circle, Arc, Rectangle, Polygon, Spline, Polyline, Text,
     Move, Copy, Rotate, Scale, Mirror, Offset, Trim, Extend, Fillet, Chamfer,
     Stretch, Erase,
+    Undo, Redo,
+    Eye, EyeOff,
+    ZoomIn, ZoomOut, ZoomFit,
 }
 
 const ICON_SIZE: f32 = 30.0;
@@ -20,8 +26,13 @@ const ICON_SIZE: f32 = 30.0;
 /// Draw `icon` as a clickable, fixed-size button. `active` shows the pressed state.
 /// Returns the egui `Response` (use `.clicked()`); `tooltip` shows on hover.
 pub fn icon_button(ui: &mut Ui, icon: Icon, tooltip: &str, active: bool) -> Response {
-    let (rect, mut response) = ui.allocate_exact_size(Vec2::splat(ICON_SIZE), Sense::click());
-    let hovered = response.hovered();
+    icon_button_sized(ui, icon, tooltip, active, ICON_SIZE)
+}
+
+/// `icon_button` with an explicit pixel size (status bar / panels use smaller).
+pub fn icon_button_sized(ui: &mut Ui, icon: Icon, tooltip: &str, active: bool, size: f32) -> Response {
+    let (rect, mut response) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
+    let hovered = response.hovered() && ui.is_enabled();
 
     // Button chrome.
     let visuals = ui.visuals();
@@ -38,9 +49,16 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, tooltip: &str, active: bool) -> Resp
         painter.rect_stroke(rect, 4.0, Stroke::new(1.0, visuals.widgets.active.bg_stroke.color));
     }
 
-    // Foreground glyph.
-    let fg = if active { visuals.selection.stroke.color } else { visuals.text_color() };
-    let inset = rect.shrink(ICON_SIZE * 0.26);
+    // Foreground glyph (dimmed when the button is disabled). Brighter than body
+    // text so the pictograms read at small sizes.
+    let fg = if !ui.is_enabled() {
+        visuals.weak_text_color()
+    } else if active {
+        visuals.selection.stroke.color
+    } else {
+        Color32::from_rgb(232, 238, 248)
+    };
+    let inset = rect.shrink(size * 0.24);
     icon.draw(&painter, inset, fg);
 
     if hovered {
@@ -73,29 +91,82 @@ fn arrowhead(painter: &egui::Painter, tip: Pos2, dx: f32, dy: f32, size: f32, s:
     }
 }
 
+/// CAD node marker: the small filled square AutoCAD puts on defining points.
+fn node(painter: &egui::Painter, at: Pos2, r: Rect, color: Color32) {
+    let s = r.width() * 0.13;
+    painter.rect_filled(Rect::from_center_size(at, Vec2::splat(s)), 0.5, color);
+}
+
+/// Short-dash segment (construction / original geometry).
+fn dashed(painter: &egui::Painter, a: Pos2, b: Pos2, s: Stroke) {
+    let v = b - a;
+    let len = v.length();
+    if len < 1e-3 { return; }
+    let dir = v / len;
+    let dash = (len / 5.0).clamp(2.0, 4.0);
+    let mut d = 0.0;
+    while d < len {
+        let e = (d + dash).min(len);
+        painter.line_segment([a + dir * d, a + dir * e], s);
+        d += dash * 2.0;
+    }
+}
+
 impl Icon {
     fn draw(self, painter: &egui::Painter, r: Rect, color: Color32) {
-        let s = Stroke::new(1.6, color);
-        let thin = Stroke::new(1.0, color);
+        let s = Stroke::new(1.7, color);
+        let thin = Stroke::new(1.1, color);
+        let dim = Stroke::new(1.1, color.gamma_multiply(0.62));
         let ah = r.width() * 0.22;
         match self {
+            // ── Pointer ───────────────────────────────────────────────────────
             Icon::Select => {
-                // Mouse-cursor arrow.
-                let tip = p(r, 0.15, 0.05);
+                // Classic pointer: tip top-left, notch, short tail.
                 let pts = vec![
-                    tip, p(r, 0.15, 0.85), p(r, 0.37, 0.63),
-                    p(r, 0.52, 0.95), p(r, 0.64, 0.88), p(r, 0.49, 0.57),
-                    p(r, 0.8, 0.55), tip,
+                    p(r, 0.18, 0.00), p(r, 0.18, 0.80), p(r, 0.38, 0.61),
+                    p(r, 0.53, 0.97), p(r, 0.67, 0.91), p(r, 0.52, 0.55),
+                    p(r, 0.82, 0.55), p(r, 0.18, 0.00),
                 ];
                 painter.add(egui::Shape::line(pts, s));
             }
-            Icon::Line => { painter.line_segment([p(r, 0.05, 0.95), p(r, 0.95, 0.05)], s); }
-            Icon::Circle => { painter.circle_stroke(r.center(), r.width() * 0.46, s); }
-            Icon::Arc => {
-                painter.add(egui::Shape::line(
-                    arc_pts(p(r, 0.5, 0.95), r.width() * 0.85, -2.8, -0.34, 24), s));
+
+            // ── Draw tools: geometry + node squares on the defining points ────
+            Icon::Line => {
+                let a = p(r, 0.06, 0.94);
+                let b = p(r, 0.94, 0.06);
+                painter.line_segment([a, b], s);
+                node(painter, a, r, color);
+                node(painter, b, r, color);
             }
-            Icon::Rectangle => { painter.rect_stroke(r.shrink(r.width() * 0.05), 0.0, s); }
+            Icon::Polyline => {
+                let pts = [p(r, 0.02, 0.90), p(r, 0.30, 0.14), p(r, 0.62, 0.64), p(r, 0.98, 0.06)];
+                painter.add(egui::Shape::line(pts.to_vec(), s));
+                for q in pts { node(painter, q, r, color); }
+            }
+            Icon::Circle => {
+                // Slight overshoot: circles need it to look as big as squares.
+                painter.circle_stroke(r.center(), r.width() * 0.48, s);
+                painter.circle_filled(r.center(), r.width() * 0.07, color); // center point
+            }
+            Icon::Arc => {
+                // Arc through (0.04,0.80) – (0.5,0.12) – (0.96,0.80), fully inside
+                // the box (the previous design spilled past it and looked bigger).
+                let c = p(r, 0.5, 0.6156);
+                let rad = r.width() * 0.4956;
+                let pts = arc_pts(c, rad, 0.381, -3.523, 24);
+                let (first, mid, last) =
+                    (pts[0], pts[pts.len() / 2], *pts.last().unwrap());
+                painter.add(egui::Shape::line(pts, s));
+                node(painter, first, r, color);
+                node(painter, mid, r, color);
+                node(painter, last, r, color);
+            }
+            Icon::Rectangle => {
+                let rect = Rect::from_min_max(p(r, 0.04, 0.18), p(r, 0.96, 0.82));
+                painter.rect_stroke(rect, 0.0, s);
+                node(painter, rect.left_top(), r, color);
+                node(painter, rect.right_bottom(), r, color);
+            }
             Icon::Polygon => {
                 let c = r.center();
                 let rad = r.width() * 0.5;
@@ -104,18 +175,36 @@ impl Icon {
                     c + vec2(a.cos() * rad, -a.sin() * rad)
                 }).collect();
                 painter.add(egui::Shape::closed_line(pts, s));
+                painter.circle_filled(c, r.width() * 0.07, color); // center point
             }
             Icon::Spline => {
-                // Smooth S-curve via an arc-pair polyline.
-                let mut pts = arc_pts(p(r, 0.3, 0.3), r.width() * 0.3, 1.0, -1.6, 12);
-                pts.extend(arc_pts(p(r, 0.7, 0.7), r.width() * 0.3, 1.9, 4.2, 12));
+                // Cubic Bézier + its dashed control polygon with node squares —
+                // the standard spline pictogram.
+                let (p0, p1, p2, p3) =
+                    (p(r, 0.04, 0.92), p(r, 0.22, 0.02), p(r, 0.78, 0.98), p(r, 0.96, 0.08));
+                dashed(painter, p0, p1, dim);
+                dashed(painter, p1, p2, dim);
+                dashed(painter, p2, p3, dim);
+                let n = 18;
+                let pts: Vec<Pos2> = (0..=n).map(|i| {
+                    let t = i as f32 / n as f32;
+                    let u = 1.0 - t;
+                    pos2(
+                        u*u*u*p0.x + 3.0*u*u*t*p1.x + 3.0*u*t*t*p2.x + t*t*t*p3.x,
+                        u*u*u*p0.y + 3.0*u*u*t*p1.y + 3.0*u*t*t*p2.y + t*t*t*p3.y,
+                    )
+                }).collect();
                 painter.add(egui::Shape::line(pts, s));
+                for q in [p0, p1, p2, p3] { node(painter, q, r, color); }
             }
-            Icon::Polyline => {
-                painter.add(egui::Shape::line(vec![
-                    p(r, 0.02, 0.85), p(r, 0.35, 0.2), p(r, 0.6, 0.7), p(r, 0.98, 0.1),
-                ], s));
+            Icon::Text => {
+                // A drawn capital A (strokes, not a font glyph).
+                painter.line_segment([p(r, 0.12, 0.97), p(r, 0.50, 0.02)], s);
+                painter.line_segment([p(r, 0.50, 0.02), p(r, 0.88, 0.97)], s);
+                painter.line_segment([p(r, 0.27, 0.62), p(r, 0.73, 0.62)], s);
             }
+
+            // ── Modify tools ──────────────────────────────────────────────────
             Icon::Move => {
                 let c = r.center();
                 for (dx, dy) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
@@ -125,77 +214,175 @@ impl Icon {
                 }
             }
             Icon::Copy => {
-                painter.rect_stroke(Rect::from_min_size(p(r, 0.05, 0.25), r.size() * 0.55), 0.0, s);
-                painter.rect_stroke(Rect::from_min_size(p(r, 0.4, 0.0), r.size() * 0.55), 0.0, s);
+                // Two offset sheets: original behind (dim), copy in front.
+                painter.rect_stroke(Rect::from_min_max(p(r, 0.05, 0.05), p(r, 0.62, 0.62)), 1.0, dim);
+                painter.rect_stroke(Rect::from_min_max(p(r, 0.36, 0.36), p(r, 0.95, 0.95)), 1.0, s);
             }
             Icon::Rotate => {
                 let c = r.center();
-                let rad = r.width() * 0.45;
-                painter.add(egui::Shape::line(arc_pts(c, rad, -1.2, 3.4, 24), s));
-                // Arrowhead at the open end.
-                let a = 3.4f32;
+                let rad = r.width() * 0.42;
+                painter.add(egui::Shape::line(arc_pts(c, rad, -1.1, 3.3, 24), s));
+                let a = 3.3f32;
                 let tip = c + vec2(a.cos() * rad, a.sin() * rad);
                 arrowhead(painter, tip, -a.sin(), a.cos(), ah, s);
+                painter.circle_filled(c, r.width() * 0.07, color); // pivot
             }
             Icon::Scale => {
-                painter.rect_stroke(Rect::from_min_size(p(r, 0.0, 0.35), r.size() * 0.55), 0.0, thin);
-                painter.rect_stroke(Rect::from_min_size(p(r, 0.0, 0.0), r.size() * 0.98), 0.0, s);
-                let d = p(r, 0.92, 0.92);
-                painter.line_segment([p(r, 0.55, 0.55), d], s);
-                arrowhead(painter, d, 0.7, 0.7, ah, s);
+                // Small solid square growing into the dashed large one.
+                let big = Rect::from_min_max(p(r, 0.05, 0.05), p(r, 0.95, 0.95));
+                for (a, b) in [
+                    (big.left_top(), big.right_top()),
+                    (big.right_top(), big.right_bottom()),
+                    (big.right_bottom(), big.left_bottom()),
+                    (big.left_bottom(), big.left_top()),
+                ] { dashed(painter, a, b, dim); }
+                painter.rect_stroke(Rect::from_min_max(p(r, 0.05, 0.55), p(r, 0.45, 0.95)), 0.0, s);
+                let tip = p(r, 0.86, 0.14);
+                painter.line_segment([p(r, 0.45, 0.55), tip], s);
+                arrowhead(painter, tip, 0.7, -0.7, ah, s);
             }
             Icon::Mirror => {
-                // A shape and its reflection across a dashed axis.
-                painter.add(egui::Shape::line(vec![p(r, 0.05, 0.1), p(r, 0.32, 0.5), p(r, 0.05, 0.9)], s));
-                painter.add(egui::Shape::line(vec![p(r, 0.95, 0.1), p(r, 0.68, 0.5), p(r, 0.95, 0.9)], s));
-                painter.line_segment([p(r, 0.5, 0.0), p(r, 0.5, 1.0)], Stroke::new(1.0, Color32::GRAY));
+                // Solid shape, dashed axis, dim reflected copy.
+                let axis_top = p(r, 0.5, 0.0);
+                let axis_bot = p(r, 0.5, 1.0);
+                dashed(painter, axis_top, axis_bot, dim);
+                painter.add(egui::Shape::closed_line(
+                    vec![p(r, 0.06, 0.18), p(r, 0.38, 0.5), p(r, 0.06, 0.82)], s));
+                painter.add(egui::Shape::closed_line(
+                    vec![p(r, 0.94, 0.18), p(r, 0.62, 0.5), p(r, 0.94, 0.82)], dim));
             }
             Icon::Offset => {
-                painter.add(egui::Shape::line(vec![p(r, 0.1, 0.9), p(r, 0.1, 0.1), p(r, 0.7, 0.1)], s));
-                painter.add(egui::Shape::line(vec![p(r, 0.35, 0.9), p(r, 0.35, 0.35), p(r, 0.9, 0.35)], thin));
+                // A corner path and its parallel copy.
+                painter.add(egui::Shape::line(
+                    vec![p(r, 0.10, 0.95), p(r, 0.10, 0.10), p(r, 0.95, 0.10)], s));
+                painter.add(egui::Shape::line(
+                    vec![p(r, 0.42, 0.95), p(r, 0.42, 0.42), p(r, 0.95, 0.42)], dim));
             }
             Icon::Trim => {
-                // Scissors: two blades (circles + crossed legs).
-                painter.circle_stroke(p(r, 0.2, 0.78), r.width() * 0.14, thin);
-                painter.circle_stroke(p(r, 0.2, 0.22), r.width() * 0.14, thin);
-                painter.line_segment([p(r, 0.32, 0.68), p(r, 0.95, 0.1)], s);
-                painter.line_segment([p(r, 0.32, 0.32), p(r, 0.95, 0.9)], s);
+                // A curve with the trimmed piece dashed past the cutting edge.
+                let cut_a = p(r, 0.62, 0.02);
+                let cut_b = p(r, 0.62, 0.98);
+                painter.line_segment([cut_a, cut_b], thin);
+                painter.line_segment([p(r, 0.02, 0.30), p(r, 0.62, 0.30)], s);
+                dashed(painter, p(r, 0.62, 0.30), p(r, 0.98, 0.30), dim);
+                painter.line_segment([p(r, 0.02, 0.70), p(r, 0.62, 0.70)], s);
+                dashed(painter, p(r, 0.62, 0.70), p(r, 0.98, 0.70), dim);
+                // Small X over the discarded piece.
+                painter.line_segment([p(r, 0.74, 0.44), p(r, 0.86, 0.56)], thin);
+                painter.line_segment([p(r, 0.86, 0.44), p(r, 0.74, 0.56)], thin);
             }
             Icon::Extend => {
-                // A short line extended (dashed) up to a wall.
-                painter.line_segment([p(r, 0.05, 0.5), p(r, 0.45, 0.5)], s);
-                let mut x = 0.45;
-                while x < 0.85 {
-                    painter.line_segment([p(r, x, 0.5), p(r, (x + 0.08).min(0.85), 0.5)], thin);
-                    x += 0.16;
-                }
-                painter.line_segment([p(r, 0.9, 0.05), p(r, 0.9, 0.95)], s); // wall
-                arrowhead(painter, p(r, 0.85, 0.5), 1.0, 0.0, ah, thin);
+                // A line gaining a dashed extension up to a boundary.
+                painter.line_segment([p(r, 0.02, 0.5), p(r, 0.45, 0.5)], s);
+                dashed(painter, p(r, 0.45, 0.5), p(r, 0.80, 0.5), dim);
+                arrowhead(painter, p(r, 0.84, 0.5), 1.0, 0.0, ah, s);
+                painter.line_segment([p(r, 0.92, 0.05), p(r, 0.92, 0.95)], s); // boundary
             }
             Icon::Fillet => {
-                // Right-angle corner with a rounded inner arc.
-                painter.add(egui::Shape::line(vec![p(r, 0.1, 0.05), p(r, 0.1, 0.6)], s));
-                painter.add(egui::Shape::line(vec![p(r, 0.4, 0.9), p(r, 0.95, 0.9)], s));
-                painter.add(egui::Shape::line(arc_pts(p(r, 0.4, 0.6), r.width() * 0.3, std::f32::consts::PI, std::f32::consts::FRAC_PI_2, 16), s));
+                // Square corner (dashed original) replaced by a rounded arc.
+                dashed(painter, p(r, 0.12, 0.58), p(r, 0.12, 0.92), dim);
+                dashed(painter, p(r, 0.12, 0.92), p(r, 0.46, 0.92), dim);
+                painter.line_segment([p(r, 0.12, 0.04), p(r, 0.12, 0.58)], s);
+                painter.line_segment([p(r, 0.46, 0.92), p(r, 0.96, 0.92)], s);
+                painter.add(egui::Shape::line(arc_pts(
+                    p(r, 0.46, 0.58), r.width() * 0.34,
+                    std::f32::consts::PI, std::f32::consts::FRAC_PI_2, 16), s));
             }
             Icon::Chamfer => {
-                // Right-angle corner with a beveled cut.
-                painter.add(egui::Shape::line(vec![p(r, 0.1, 0.05), p(r, 0.1, 0.6)], s));
-                painter.add(egui::Shape::line(vec![p(r, 0.4, 0.9), p(r, 0.95, 0.9)], s));
-                painter.line_segment([p(r, 0.1, 0.6), p(r, 0.4, 0.9)], s); // bevel
+                // Square corner (dashed original) replaced by a bevel.
+                dashed(painter, p(r, 0.12, 0.58), p(r, 0.12, 0.92), dim);
+                dashed(painter, p(r, 0.12, 0.92), p(r, 0.46, 0.92), dim);
+                painter.line_segment([p(r, 0.12, 0.04), p(r, 0.12, 0.58)], s);
+                painter.line_segment([p(r, 0.46, 0.92), p(r, 0.96, 0.92)], s);
+                painter.line_segment([p(r, 0.12, 0.58), p(r, 0.46, 0.92)], s);
             }
             Icon::Stretch => {
-                painter.add(egui::Shape::line(vec![p(r, 0.1, 0.7), p(r, 0.45, 0.3), p(r, 0.6, 0.55)], s));
-                let tip = p(r, 0.95, 0.5);
-                painter.line_segment([p(r, 0.55, 0.5), tip], s);
+                // Crossing window with a grip pulled to the right.
+                let win = Rect::from_min_max(p(r, 0.05, 0.22), p(r, 0.52, 0.78));
+                for (a, b) in [
+                    (win.left_top(), win.right_top()),
+                    (win.right_top(), win.right_bottom()),
+                    (win.right_bottom(), win.left_bottom()),
+                    (win.left_bottom(), win.left_top()),
+                ] { dashed(painter, a, b, dim); }
+                let grip = p(r, 0.52, 0.5);
+                node(painter, grip, r, color);
+                let tip = p(r, 0.92, 0.5);
+                painter.line_segment([grip, tip], s);
                 arrowhead(painter, tip, 1.0, 0.0, ah, s);
             }
             Icon::Erase => {
-                // Eraser block on a baseline.
-                let body = Rect::from_min_max(p(r, 0.15, 0.2), p(r, 0.7, 0.6));
-                painter.rect_stroke(body, 1.0, s);
-                painter.line_segment([p(r, 0.15, 0.45), p(r, 0.7, 0.45)], thin);
-                painter.line_segment([p(r, 0.05, 0.85), p(r, 0.95, 0.85)], s);
+                // Tilted eraser block with its band, over a swipe line.
+                painter.add(egui::Shape::closed_line(vec![
+                    p(r, 0.12, 0.62), p(r, 0.52, 0.10), p(r, 0.82, 0.34), p(r, 0.42, 0.86),
+                ], s));
+                painter.line_segment([p(r, 0.27, 0.43), p(r, 0.57, 0.67)], thin); // band
+                painter.line_segment([p(r, 0.50, 0.95), p(r, 0.95, 0.95)], thin); // swipe
+            }
+
+            // ── History ───────────────────────────────────────────────────────
+            Icon::Undo => {
+                // Counter-clockwise arc, arrowhead on the left end.
+                let c = p(r, 0.5, 0.55);
+                let rad = r.width() * 0.44;
+                painter.add(egui::Shape::line(arc_pts(c, rad, -0.25, -2.90, 18), s));
+                let a = -2.90f32;
+                let tip = c + vec2(a.cos() * rad, a.sin() * rad);
+                arrowhead(painter, tip, a.sin(), -a.cos(), ah, s);
+            }
+            Icon::Redo => {
+                // Mirrored: clockwise arc, arrowhead on the right end.
+                let c = p(r, 0.5, 0.55);
+                let rad = r.width() * 0.44;
+                painter.add(egui::Shape::line(arc_pts(c, rad, -2.89, -0.24, 18), s));
+                let a = -0.24f32;
+                let tip = c + vec2(a.cos() * rad, a.sin() * rad);
+                arrowhead(painter, tip, -a.sin(), a.cos(), ah, s);
+            }
+
+            // ── Visibility ────────────────────────────────────────────────────
+            Icon::Eye | Icon::EyeOff => {
+                // Almond eye outline + pupil (Lucide-style).
+                let n = 12;
+                let lid = |sign: f32| -> Vec<Pos2> {
+                    (0..=n).map(|i| {
+                        let t = i as f32 / n as f32;
+                        p(r, 0.02 + 0.96 * t,
+                          0.5 + sign * 0.40 * (std::f32::consts::PI * t).sin())
+                    }).collect()
+                };
+                painter.add(egui::Shape::line(lid(-1.0), s));
+                painter.add(egui::Shape::line(lid(1.0), s));
+                painter.circle_stroke(r.center(), r.width() * 0.15, s);
+                if self == Icon::EyeOff {
+                    painter.line_segment([p(r, 0.12, 0.95), p(r, 0.88, 0.05)], s);
+                }
+            }
+
+            // ── Zoom ──────────────────────────────────────────────────────────
+            Icon::ZoomIn | Icon::ZoomOut => {
+                let c = p(r, 0.42, 0.42);
+                let rad = r.width() * 0.34;
+                painter.circle_stroke(c, rad, s);
+                let h0 = c + vec2(rad * 0.72, rad * 0.72);
+                painter.line_segment([h0, p(r, 0.96, 0.96)], s);
+                painter.line_segment([c - vec2(rad * 0.5, 0.0), c + vec2(rad * 0.5, 0.0)], s);
+                if self == Icon::ZoomIn {
+                    painter.line_segment([c - vec2(0.0, rad * 0.5), c + vec2(0.0, rad * 0.5)], s);
+                }
+            }
+            Icon::ZoomFit => {
+                // Frame corner brackets around a small shape.
+                let k = 0.22;
+                for (cx, cy, dx, dy) in [
+                    (0.04, 0.04, 1.0, 1.0), (0.96, 0.04, -1.0, 1.0),
+                    (0.96, 0.96, -1.0, -1.0), (0.04, 0.96, 1.0, -1.0),
+                ] {
+                    let corner = p(r, cx, cy);
+                    painter.line_segment([corner, p(r, cx + dx * k, cy)], s);
+                    painter.line_segment([corner, p(r, cx, cy + dy * k)], s);
+                }
+                painter.rect_stroke(Rect::from_min_max(p(r, 0.32, 0.38), p(r, 0.68, 0.62)), 0.0, thin);
             }
         }
     }

@@ -14,8 +14,10 @@ use crate::tools::Tool;
 use crate::command::Command;
 
 mod chrome;
+mod palette;
 mod tessellate;
 use chrome::{menu_bar, ribbon, status_and_command, layer_panel};
+use palette::command_palette;
 use tessellate::draw_curve;
 
 /// Per-frame UI state that the host owns across frames.
@@ -31,20 +33,28 @@ pub struct UiState {
     pub dyn_active: bool,
     /// Typed value buffer for the contextual corner fillet/chamfer grip.
     pub corner_input: String,
+    /// Ctrl+K command palette.
+    pub palette_open: bool,
+    pub palette_query: String,
+    pub palette_index: usize,
 }
 
 /// Build the entire UI for one frame.
 pub fn draw_ui(ctx: &Context, app: &mut AppState, ui_state: &mut UiState) {
+    crate::theme::apply(ctx);
+    // The palette runs first so it consumes its keys (Esc/Enter/arrows/Ctrl+K)
+    // before the canvas keyboard handling sees them.
+    let palette_open = command_palette(ctx, app, ui_state);
     menu_bar(ctx, app);
     ribbon(ctx, app);
     status_and_command(ctx, app, ui_state);
     layer_panel(ctx, app);
-    canvas(ctx, app, ui_state);
+    canvas(ctx, app, ui_state, palette_open);
 }
 
 // ── Menu bar (spec: File/Edit/View/Draw/Modify/Tools/Help) ────────────────────
 
-fn canvas(ctx: &Context, app: &mut AppState, ui_state: &mut UiState) {
+fn canvas(ctx: &Context, app: &mut AppState, ui_state: &mut UiState, palette_open: bool) {
     CentralPanel::default().show(ctx, |ui| {
         let avail = ui.available_size();
         app.view.width = avail.x as f64;
@@ -88,7 +98,11 @@ fn canvas(ctx: &Context, app: &mut AppState, ui_state: &mut UiState) {
                         } else {
                             exact2d_cad::select_window(&app.document, &rect)
                         };
-                        app.selection = sel.into_iter().filter(|&id| id != app.origin_id).collect();
+                        app.selection = sel.into_iter()
+                            .filter(|&id| id != app.origin_id)
+                            .filter(|&id| app.document.get(id)
+                                .map(|e| layer_visible(app, e)).unwrap_or(false))
+                            .collect();
                     }
                 }
                 ctx.data_mut(|d| d.insert_temp(egui::Id::new("marquee_on"), false));
@@ -107,17 +121,19 @@ fn canvas(ctx: &Context, app: &mut AppState, ui_state: &mut UiState) {
         // press makes placement instant and drag-tolerant — and matches how CAD
         // tools place points. Select mode keeps `clicked()` so press-and-drag still
         // drives grip editing and rubber-band selection.
-        // ── Contextual corner grip (Inventor-style): a small blue dot sits inside
-        // the corner. Hover for the hint; click and move RIGHT to fillet / LEFT to
-        // chamfer, sized live (or type a value); click again (or Enter) to apply.
-        // The dot/tooltip/preview are painted later; here we just hit-test + drive. ──
-        let corner_geom = if app.corner_action.is_none() && matches!(app.tool, Tool::Select) {
-            app.detect_corner()
-        } else {
-            None
-        };
-        // Dot ~16px into the interior wedge from the vertex.
-        let corner_dot = corner_geom.map(|g| {
+        // ── Contextual corner grips (Illustrator-style): a small blue dot sits
+        // inside EVERY fillettable corner of the selection (line–line, line–arc,
+        // arc–arc). Hover for the hint; click and move RIGHT to fillet / LEFT to
+        // chamfer (line–line only), sized live (or type a value); click again
+        // (or Enter) to apply. Painted later; here we just hit-test + drive. ──
+        let corner_geoms: Vec<crate::state::CornerGeom> =
+            if app.corner_action.is_none() && matches!(app.tool, Tool::Select) {
+                app.detect_corners()
+            } else {
+                Vec::new()
+            };
+        // Each dot sits ~30px into the interior wedge from its vertex.
+        let corner_dots: Vec<(crate::state::CornerGeom, egui::Pos2)> = corner_geoms.iter().map(|g| {
             let scr = |wx: f64, wy: f64| {
                 let (sx, sy) = app.view.world_to_screen(wx, wy);
                 pos2(origin.x + sx as f32, origin.y + sy as f32)
@@ -127,11 +143,11 @@ fn canvas(ctx: &Context, app: &mut AppState, ui_state: &mut UiState) {
             let b = (scr(g.corner.0 + g.dir_b.0 * g.len_b, g.corner.1 + g.dir_b.1 * g.len_b) - c).normalized();
             let mut bis = a + b;
             if bis.length() < 1e-3 { bis = egui::vec2(-a.y, a.x); }
-            (g, c + bis.normalized() * 30.0) // sit a little clear of the lines
-        });
-        let over_dot = corner_dot
-            .and_then(|(_, dp)| response.hover_pos().map(|p| (p - dp).length() <= 9.0))
-            .unwrap_or(false);
+            (*g, c + bis.normalized() * 30.0) // sit a little clear of the curves
+        }).collect();
+        let hovered_dot: Option<usize> = response.hover_pos()
+            .and_then(|p| corner_dots.iter().position(|(_, dp)| (p - *dp).length() <= 9.0));
+        let over_dot = hovered_dot.is_some();
 
         let corner_busy = app.corner_action.is_some() || over_dot;
         if app.corner_action.is_some() {
@@ -157,8 +173,9 @@ fn canvas(ctx: &Context, app: &mut AppState, ui_state: &mut UiState) {
                 app.cancel_corner_action();
                 ui_state.corner_input.clear();
             }
-        } else if over_dot && response.clicked() {
-            if let Some((g, _)) = corner_dot {
+        } else if response.clicked() {
+            if let Some(i) = hovered_dot {
+                let (g, _) = corner_dots[i];
                 app.begin_corner_action(g);
                 ui_state.corner_input.clear();
             }
@@ -217,7 +234,7 @@ fn canvas(ctx: &Context, app: &mut AppState, ui_state: &mut UiState) {
         }
 
         // While interacting with the corner grip the click was consumed above — don't pick.
-        let place_point = !corner_busy && if matches!(app.tool, Tool::Select) {
+        let place_point = !corner_busy && !palette_open && if matches!(app.tool, Tool::Select) {
             response.clicked()
         } else {
             response.contains_pointer() && ui.input(|i| i.pointer.primary_pressed())
@@ -228,18 +245,20 @@ fn canvas(ctx: &Context, app: &mut AppState, ui_state: &mut UiState) {
             }
         }
         // Esc cancels the in-progress tool input and returns to SELECT tool.
-        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if !palette_open && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             app.execute(Command::Cancel);
         }
         // Enter or Space commits the active drawing tool (like Polyline) — but not
-        // while a text field (command line or the dynamic-input HUD) has focus.
+        // while a text field (command line, dyn HUD, or palette) has focus.
         let in_text_field = {
             let f = ctx.memory(|mem| mem.focused());
             f == Some(egui::Id::new("command_line_input"))
                 || f == Some(egui::Id::new("dyn_len"))
                 || f == Some(egui::Id::new("dyn_ang"))
+                || f == Some(egui::Id::new("palette_input"))
         };
-        if ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space))
+        if !palette_open
+            && ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space))
             && !in_text_field {
                 app.run_command("");
             }
@@ -250,6 +269,7 @@ fn canvas(ctx: &Context, app: &mut AppState, ui_state: &mut UiState) {
                 let (wx, wy) = app.view.screen_to_world((p.x - origin.x) as f64, (p.y - origin.y) as f64);
                 exact2d_cad::pick_at(&app.document, wx, wy, app.view.pixel_world_size() * 6.0)
             }).filter(|&id| id != app.origin_id)
+              .filter(|&id| app.document.get(id).map(|e| layer_visible(app, e)).unwrap_or(false))
         } else {
             None
         };
@@ -263,7 +283,7 @@ fn canvas(ctx: &Context, app: &mut AppState, ui_state: &mut UiState) {
             }
             response.context_menu(|ui| {
                 if !app.selection.is_empty() {
-                    if ui.button("🗑  Delete").clicked() { app.erase_selection(); ui.close_menu(); }
+                    if ui.button("Delete").clicked() { app.erase_selection(); ui.close_menu(); }
                     ui.separator();
                     let acts = [
                         ("Move", Command::Activate(Tool::Move { base: None, ids: vec![] })),
@@ -278,7 +298,7 @@ fn canvas(ctx: &Context, app: &mut AppState, ui_state: &mut UiState) {
                     ui.separator();
                 }
                 if let Some(last) = app.last_command.clone() {
-                    if ui.button(format!("🔁  Repeat: {last}")).clicked() { app.repeat_last_command(); ui.close_menu(); }
+                    if ui.button(format!("Repeat: {last}")).clicked() { app.repeat_last_command(); ui.close_menu(); }
                 }
                 if ui.button("Select All").clicked() { app.execute(Command::SelectAll); ui.close_menu(); }
                 if ui.button("Zoom Extents").clicked() { app.zoom_extents(); ui.close_menu(); }
@@ -292,12 +312,14 @@ fn canvas(ctx: &Context, app: &mut AppState, ui_state: &mut UiState) {
         // Automatically focus command input if user starts typing when hovering the canvas and command input is not focused
         let focused_id = ctx.memory(|mem| mem.focused());
         let cmd_input_id = egui::Id::new("command_line_input");
-        // Don't hijack typing when a dynamic-input HUD field already has focus.
+        // Don't hijack typing when a dynamic-input HUD field or the command
+        // palette already has focus.
         let hud_focused = focused_id == Some(egui::Id::new("dyn_len"))
-            || focused_id == Some(egui::Id::new("dyn_ang"));
+            || focused_id == Some(egui::Id::new("dyn_ang"))
+            || focused_id == Some(egui::Id::new("palette_input"));
         let mut focus_cmd = false;
         let mut text_to_append = String::new();
-        if response.hovered() && focused_id != Some(cmd_input_id) && !hud_focused {
+        if response.hovered() && focused_id != Some(cmd_input_id) && !hud_focused && !palette_open {
             ui.input(|i| {
                 for event in &i.events {
                     if let egui::Event::Text(text) = event {
@@ -388,6 +410,8 @@ fn canvas(ctx: &Context, app: &mut AppState, ui_state: &mut UiState) {
         painter.rect_filled(rect, 0.0, Color32::from_rgb(20, 26, 36));
         if app.grid_on { draw_grid(&painter, app, rect, &to_screen); }
         for e in app.document.iter() {
+            // Hidden layers don't draw (the origin marker always shows).
+            if e.id != app.origin_id && !layer_visible(app, e) { continue; }
             let (r, g, b) = resolve_color(app, e);
             let selected = app.selection.contains(&e.id);
             let hovered = !selected && Some(e.id) == hovered_id;
@@ -402,23 +426,26 @@ fn canvas(ctx: &Context, app: &mut AppState, ui_state: &mut UiState) {
             draw_entity(&painter, app, e, origin, Stroke::new(width, color));
         }
 
-        // Contextual corner grip: the blue dot (idle) or the live fillet/chamfer
-        // preview (while dragging).
+        // Contextual corner grips: blue dots on every fillettable corner (idle)
+        // or the live fillet/chamfer preview (while one is being dragged).
         if let Some(ca) = app.corner_action {
             draw_corner_preview(&painter, app, &ca, &to_screen);
-        } else if let Some((_, dp)) = corner_dot {
-            let r = if over_dot { 7.0 } else { 5.0 };
-            painter.circle_filled(dp, r, Color32::from_rgb(0, 150, 255));
-            painter.circle_stroke(dp, r, Stroke::new(1.5, Color32::from_rgb(190, 225, 255)));
-            if over_dot {
-                let txt = "◂ Chamfer    Fillet ▸";
-                let tp = pos2(dp.x + 12.0, dp.y - 22.0);
-                let galley = painter.layout_no_wrap(txt.to_string(),
-                    egui::FontId::proportional(12.0), Color32::WHITE);
-                let bg = egui::Rect::from_min_size(tp, galley.size()).expand(5.0);
-                painter.rect_filled(bg, 6.0, Color32::from_rgba_unmultiplied(26, 32, 42, 235));
-                painter.rect_stroke(bg, 6.0, Stroke::new(1.0, Color32::from_rgb(0, 200, 255)));
-                painter.galley(tp, galley, Color32::WHITE);
+        } else {
+            for (i, (g, dp)) in corner_dots.iter().enumerate() {
+                let hovered = hovered_dot == Some(i);
+                let r = if hovered { 7.0 } else { 5.0 };
+                painter.circle_filled(*dp, r, Color32::from_rgb(0, 150, 255));
+                painter.circle_stroke(*dp, r, Stroke::new(1.5, Color32::from_rgb(190, 225, 255)));
+                if hovered {
+                    let txt = if g.chamfer_ok { "◂ Chamfer    Fillet ▸" } else { "Fillet — drag to size" };
+                    let tp = pos2(dp.x + 12.0, dp.y - 22.0);
+                    let galley = painter.layout_no_wrap(txt.to_string(),
+                        egui::FontId::proportional(12.0), Color32::WHITE);
+                    let bg = egui::Rect::from_min_size(tp, galley.size()).expand(5.0);
+                    painter.rect_filled(bg, 6.0, Color32::from_rgba_unmultiplied(26, 32, 42, 235));
+                    painter.rect_stroke(bg, 6.0, Stroke::new(1.0, Color32::from_rgb(0, 200, 255)));
+                    painter.galley(tp, galley, Color32::WHITE);
+                }
             }
         }
 
@@ -458,12 +485,18 @@ fn canvas(ctx: &Context, app: &mut AppState, ui_state: &mut UiState) {
             draw_dashed_line(&painter, p_start, p_end, guide_stroke, 6.0, 6.0);
         }
 
-        // Rubber-band preview for the active tool.
+        // Rubber-band preview for the active tool — 50% transparent so it never
+        // reads as committed geometry.
         let cursor = Point2d::from_f64(app.cursor_world.0, app.cursor_world.1);
-        let preview_stroke = Stroke::new(1.5, Color32::from_rgb(130, 200, 130));
+        let preview_stroke = Stroke::new(1.5, Color32::from_rgba_unmultiplied(130, 200, 130, 128));
         for c in app.tool.preview(&cursor) {
             draw_curve(&painter, &c, &to_screen, preview_stroke);
         }
+
+        // Ghost preview for the transform tools (Move/Copy/Rotate/Scale/Mirror):
+        // once the base point is set, the would-be result follows the cursor as a
+        // 50%-transparent ghost — same live-feedback idea as the fillet grip.
+        draw_transform_ghost(&painter, app, &to_screen);
 
 
 
@@ -668,48 +701,7 @@ fn canvas(ctx: &Context, app: &mut AppState, ui_state: &mut UiState) {
 
             // Calculate input text (Box 2)
             let input_text = if is_drawing {
-                let prompt_base = match &app.tool {
-                    Tool::Line { last } => {
-                        if last.is_none() { "Specify start point: " } else { "Specify length: " }
-                    }
-                    Tool::Circle { center } => {
-                        if center.is_none() { "Specify center point: " } else { "Specify radius: " }
-                    }
-                    Tool::Rectangle { first } => {
-                        if first.is_none() { "Specify first corner: " } else { "Specify opposite corner: " }
-                    }
-                    Tool::Arc3 { pts } => {
-                        if pts.is_empty() {
-                            "Specify start point: "
-                        } else if pts.len() == 1 {
-                            "Specify second point: "
-                        } else {
-                            "Specify third point: "
-                        }
-                    }
-                    Tool::Move { base, .. } => {
-                        if base.is_none() { "Specify base point: " } else { "Specify displacement: " }
-                    }
-                    Tool::Copy { base, .. } => {
-                        if base.is_none() { "Specify base point: " } else { "Specify displacement: " }
-                    }
-                    Tool::Polygon { center, .. } => {
-                        if center.is_none() { "" } else { "Specify radius: " }
-                    }
-                    Tool::Spline { pts } => {
-                        if pts.is_empty() { "Specify start point: " } else { "Specify next point: " }
-                    }
-                    Tool::Polyline { pts } => {
-                        if pts.is_empty() { "Specify start point: " } else { "Specify next point or [Close]: " }
-                    }
-                    _ => "Specify point: ",
-                };
-                let prompt = if let Tool::Polygon { center: None, sides } = &app.tool {
-                    format!("Specify number of sides <{}>: ", sides)
-                } else {
-                    prompt_base.to_string()
-                };
-                Some(format!("{}{}_", prompt, ui_state.command_input))
+                Some(format!("{}: {}_", tool_prompt(&app.tool), ui_state.command_input))
             } else if !ui_state.command_input.is_empty() {
                 Some(format!("Command: {}_", ui_state.command_input))
             } else {
@@ -784,20 +776,91 @@ fn canvas(ctx: &Context, app: &mut AppState, ui_state: &mut UiState) {
         // label update live as you zoom.
         draw_scale_bar(&painter, app, rect);
 
-        // Diagnostic HUD (top-left): if "Clicks" rises when you click, input works.
-        let hud = format!(
-            "Tool: {}   Cursor: {}   Entities: {}   Clicks: {}",
-            app.tool.name(), app.coord_readout(), app.document.len(), app.click_count);
-        painter.text(rect.left_top() + vec2(8.0, 6.0), egui::Align2::LEFT_TOP, hud,
-            egui::FontId::monospace(13.0), Color32::from_rgb(150, 200, 150));
-        // Hint line.
-        let hint = match app.tool {
-            crate::tools::Tool::Select => "Click a ribbon tool (Line/Circle/…) or type a command, then click in the canvas.",
-            _ => "Click in the canvas to place points. Esc cancels. Right-drag pans, wheel zooms.",
-        };
-        painter.text(rect.left_top() + vec2(8.0, 24.0), egui::Align2::LEFT_TOP, hint,
-            egui::FontId::proportional(12.0), Color32::from_rgb(120, 130, 150));
+        // Tool prompt chip (top-center, Fusion/Onshape-style): while a tool is
+        // active, one quiet line says exactly what the next click does.
+        if !matches!(app.tool, Tool::Select) {
+            let prompt = tool_prompt(&app.tool);
+            let chip = format!("{} — {}   ·   Esc cancel", app.tool.name(), prompt);
+            draw_prompt_chip(&painter, rect, &chip);
+        } else if app.document.len() <= 1 {
+            // Empty document, no tool: gentle getting-started hint instead of a
+            // blank void (the origin marker is the only entity).
+            let title = "Start drawing";
+            let lines = "L Line   ·   C Circle   ·   REC Rectangle   ·   Ctrl+K all commands";
+            let center = pos2(rect.center().x, rect.center().y - 20.0);
+            painter.text(center, egui::Align2::CENTER_BOTTOM, title,
+                egui::FontId::proportional(22.0), Color32::from_rgb(90, 102, 122));
+            painter.text(center + vec2(0.0, 10.0), egui::Align2::CENTER_TOP, lines,
+                egui::FontId::proportional(13.0), Color32::from_rgb(70, 82, 100));
+        }
     });
+}
+
+/// One-line instruction for the active tool's next click. Shared by the
+/// top-center prompt chip and the cursor-side dynamic tooltip.
+fn tool_prompt(tool: &Tool) -> String {
+    match tool {
+        Tool::Line { last } =>
+            if last.is_none() { "Specify start point".into() } else { "Specify next point or length".into() },
+        Tool::Circle { center } =>
+            if center.is_none() { "Specify center point".into() } else { "Specify radius".into() },
+        Tool::Rectangle { first } =>
+            if first.is_none() { "Specify first corner".into() } else { "Specify opposite corner".into() },
+        Tool::Arc3 { pts } => match pts.len() {
+            0 => "Specify start point".into(),
+            1 => "Specify second point".into(),
+            _ => "Specify end point".into(),
+        },
+        Tool::Move { base, .. } =>
+            if base.is_none() { "Specify base point".into() } else { "Specify destination".into() },
+        Tool::Copy { base, .. } =>
+            if base.is_none() { "Specify base point".into() } else { "Specify destination".into() },
+        Tool::Rotate { base, .. } =>
+            if base.is_none() { "Specify base point".into() } else { "Specify rotation angle".into() },
+        Tool::Scale { base, .. } =>
+            if base.is_none() { "Specify base point".into() } else { "Specify scale factor".into() },
+        Tool::Mirror { first, .. } =>
+            if first.is_none() { "Specify first point of mirror axis".into() } else { "Specify second point of mirror axis".into() },
+        Tool::Polygon { center, sides } =>
+            if center.is_none() { format!("Specify number of sides <{sides}> or center point") }
+            else { "Specify radius".into() },
+        Tool::Spline { pts } =>
+            if pts.is_empty() { "Specify start point".into() } else { format!("Specify next point ({}/4)", pts.len()) },
+        Tool::Polyline { pts } =>
+            if pts.is_empty() { "Specify start point".into() } else { "Specify next point — Enter/right-click finishes".into() },
+        Tool::Text { anchor, .. } =>
+            if anchor.is_none() { "Specify text anchor point".into() } else { "Type the text, Enter to place".into() },
+        Tool::Offset { source, .. } =>
+            if source.is_none() { "Click the curve to offset (type a distance first)".into() }
+            else { "Click the side to offset towards".into() },
+        Tool::Trim => "Click the segment piece to cut away".into(),
+        Tool::Extend => "Click the end to lengthen".into(),
+        Tool::Fillet { first, .. } =>
+            if first.is_none() { "Pick the first line".into() } else { "Pick the second line".into() },
+        Tool::Chamfer { first, .. } =>
+            if first.is_none() { "Pick the first line".into() } else { "Pick the second line".into() },
+        Tool::Stretch { c1, c2, base, .. } => match (c1, c2, base) {
+            (None, _, _) => "Specify first corner of crossing window".into(),
+            (Some(_), None, _) => "Specify opposite corner".into(),
+            (_, _, None) => "Specify base point".into(),
+            _ => "Specify destination".into(),
+        },
+        Tool::Select => "Click an entity, or drag a window".into(),
+    }
+}
+
+/// Paint the quiet instruction chip centered at the top of the canvas.
+fn draw_prompt_chip(painter: &egui::Painter, rect: egui::Rect, text: &str) {
+    let galley = painter.layout_no_wrap(text.to_string(),
+        egui::FontId::proportional(13.0), crate::theme::TEXT);
+    let pad = vec2(14.0, 7.0);
+    let size = galley.size() + pad * 2.0;
+    let top_center = pos2(rect.center().x - size.x / 2.0, rect.top() + 10.0);
+    let bg = egui::Rect::from_min_size(top_center, size);
+    painter.rect(bg, 16.0,
+        Color32::from_rgba_unmultiplied(27, 34, 46, 235),
+        Stroke::new(1.0, crate::theme::OUTLINE));
+    painter.galley(bg.min + pad, galley, crate::theme::TEXT);
 }
 
 /// Draw a faint adaptive grid at "nice" world spacing.
@@ -930,6 +993,68 @@ fn draw_dashed_line(
     }
 }
 
+/// Ghost preview for the transform tools: with the base point placed, draw the
+/// selection as it would land at the cursor — 50% transparent accent strokes.
+fn draw_transform_ghost(
+    painter: &egui::Painter,
+    app: &AppState,
+    to_screen: &impl Fn(f64, f64) -> egui::Pos2,
+) {
+    use exact2d_algebra::Rational;
+    use exact2d_geometry::Transform2d;
+    let (cx, cy) = app.cursor_world;
+    let ghost = Stroke::new(1.5, Color32::from_rgba_unmultiplied(0, 200, 255, 128));
+
+    // OFFSET: once a curve is picked, preview the offset on the cursor's side
+    // (the same side selection the click will make).
+    if let Tool::Offset { dist, source: Some(src) } = &app.tool {
+        if let Some(c) = app.document.get(*src).and_then(|e| e.as_curve()) {
+            let plus = exact2d_geometry::offset_curve(c, dist.abs());
+            let minus = exact2d_geometry::offset_curve(c, -dist.abs());
+            let dp = exact2d_geometry::point_to_curve_distance(&plus, cx, cy);
+            let dm = exact2d_geometry::point_to_curve_distance(&minus, cx, cy);
+            let chosen = if dp <= dm { plus } else { minus };
+            draw_curve(painter, &chosen, to_screen, ghost);
+        }
+        return;
+    }
+
+    let rat = |v: f64| Rational::from_f64_approx(v);
+    let (t, ids): (Transform2d, &Vec<exact2d_document::EntityId>) = match &app.tool {
+        Tool::Move { base: Some(b), ids } | Tool::Copy { base: Some(b), ids } => {
+            let (bx, by) = b.to_f64();
+            (Transform2d::translation(rat(cx - bx), rat(cy - by)), ids)
+        }
+        Tool::Rotate { base: Some(b), ids } => {
+            let (bx, by) = b.to_f64();
+            (Transform2d::rotation_about(b, (cy - by).atan2(cx - bx)), ids)
+        }
+        Tool::Scale { base: Some(b), reference: Some(r1), ids } => {
+            let factor = (b.dist_f64(&Point2d::from_f64(cx, cy)) / r1).max(1e-9);
+            let f = rat(factor);
+            (Transform2d::scale_about(b, f.clone(), f), ids)
+        }
+        Tool::Mirror { first: Some(f), ids } => {
+            let (fx, fy) = f.to_f64();
+            if (cx - fx).hypot(cy - fy) < 1e-9 { return; }
+            (Transform2d::mirror_line(f, &Point2d::from_f64(cx, cy)), ids)
+        }
+        _ => return,
+    };
+    let sel = if ids.is_empty() { &app.selection } else { ids };
+    for &id in sel {
+        if id == app.origin_id { continue; }
+        if let Some(c) = app.document.get(id).and_then(|e| e.as_curve()) {
+            draw_curve(painter, &t.apply_curve(c), to_screen, ghost);
+        }
+    }
+}
+
+/// Whether the entity's layer is currently shown.
+fn layer_visible(app: &AppState, e: &exact2d_document::Entity) -> bool {
+    app.document.layers.get(e.layer).map(|l| l.on).unwrap_or(true)
+}
+
 fn resolve_color(app: &AppState, e: &exact2d_document::Entity) -> (u8, u8, u8) {
     match &e.color {
         Color::Rgb(r, g, b) => (*r, *g, *b),
@@ -1016,7 +1141,8 @@ fn draw_corner_preview(
     to_screen: &impl Fn(f64, f64) -> egui::Pos2,
 ) {
     let accent = Color32::from_rgb(0, 220, 255);
-    let stroke = Stroke::new(2.0, accent);
+    // 50% transparent so the proposed geometry never reads as committed lines.
+    let stroke = Stroke::new(2.0, Color32::from_rgba_unmultiplied(0, 220, 255, 128));
     let g = &ca.geom;
     let far_a = (g.corner.0 + g.dir_a.0 * g.len_a, g.corner.1 + g.dir_a.1 * g.len_a);
     let far_b = (g.corner.0 + g.dir_b.0 * g.len_b, g.corner.1 + g.dir_b.1 * g.len_b);
@@ -1025,8 +1151,12 @@ fn draw_corner_preview(
     match ca.kind {
         crate::state::CornerKind::Fillet => {
             if let Some((p1, p2, c)) = crate::state::fillet_arc(g.corner, g.dir_a, g.dir_b, ca.size) {
-                painter.line_segment(seg(far_a, p1), stroke);
-                painter.line_segment(seg(far_b, p2), stroke);
+                // The straight trimmed-edge preview only matches line edges; for
+                // arc corners just show the proposed fillet arc.
+                if g.chamfer_ok {
+                    painter.line_segment(seg(far_a, p1), stroke);
+                    painter.line_segment(seg(far_b, p2), stroke);
+                }
                 let a1 = (p1.1 - c.1).atan2(p1.0 - c.0);
                 let a2 = (p2.1 - c.1).atan2(p2.0 - c.0);
                 let mut d = a2 - a1;

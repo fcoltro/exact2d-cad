@@ -16,6 +16,7 @@ pub mod history;
 pub mod state;
 pub mod view;
 pub mod icons;
+pub mod theme;
 
 pub use view_transform::ViewTransform;
 pub use tools::{Tool, ToolEvent};

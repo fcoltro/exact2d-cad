@@ -1,7 +1,7 @@
 //! Window chrome: menu bar, icon ribbon, status/command bar, and the layer panel.
 //! Split out of `view.rs` so the file root keeps `draw_ui` + the drawing canvas.
 
-use egui::{Context, TopBottomPanel, SidePanel, Color32};
+use egui::{Context, TopBottomPanel, SidePanel};
 use exact2d_document::{Units, Layer};
 use crate::state::AppState;
 use crate::tools::Tool;
@@ -29,6 +29,19 @@ pub(super) fn menu_bar(ctx: &Context, app: &mut AppState) {
     let save_key    = ctrl && !shift && s_key;
     if save_as_key || (save_key && !app.save_file()) {
         file_save_as(app);
+    }
+
+    // Edit shortcuts — only when no text field has focus, so typing in the
+    // command line / palette / HUD never deletes geometry or undoes the model.
+    let typing = ctx.memory(|m| m.focused().is_some());
+    if !typing {
+        let z = ctx.input(|i| i.key_pressed(egui::Key::Z));
+        let y = ctx.input(|i| i.key_pressed(egui::Key::Y));
+        if ctrl && ((z && shift) || y) { app.redo(); }
+        else if ctrl && z { app.undo(); }
+        if ctx.input(|i| i.key_pressed(egui::Key::Delete)) {
+            app.erase_selection();
+        }
     }
 
     TopBottomPanel::top("menu_bar").show(ctx, |ui| {
@@ -77,11 +90,18 @@ pub(super) fn menu_bar(ctx: &Context, app: &mut AppState) {
                 }
             });
             ui.menu_button("Edit", |ui| {
-                if ui.add_enabled(app.history.can_undo(), egui::Button::new("Undo")).clicked() { app.undo(); }
-                if ui.add_enabled(app.history.can_redo(), egui::Button::new("Redo")).clicked() { app.redo(); }
+                if ui.add_enabled(app.history.can_undo(),
+                    egui::Button::new("Undo").shortcut_text("Ctrl+Z")).clicked() { app.undo(); }
+                if ui.add_enabled(app.history.can_redo(),
+                    egui::Button::new("Redo").shortcut_text("Ctrl+Y")).clicked() { app.redo(); }
                 ui.separator();
-                if ui.button("Erase").clicked() { app.erase_selection(); }
+                if ui.add(egui::Button::new("Erase").shortcut_text("Del")).clicked() { app.erase_selection(); }
                 if ui.button("Select All").clicked() { app.execute(Command::SelectAll); }
+                ui.separator();
+                if ui.add(egui::Button::new("Command Palette…").shortcut_text("Ctrl+K")).clicked() {
+                    // Toggled by the palette itself next frame via this marker.
+                    ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("open_palette"), true));
+                }
             });
             ui.menu_button("View", |ui| {
                 if ui.button("Zoom Extents").clicked() { app.zoom_extents(); }
@@ -146,6 +166,7 @@ pub(super) fn ribbon(ctx: &Context, app: &mut AppState) {
             ui.spacing_mut().item_spacing.x = 3.0;
             tool_icon(ui, app, Icon::Select, "Select  (SE)", Tool::Select);
             ui.separator();
+            group_label(ui, "DRAW");
 
             // Draw group.
             tool_icon(ui, app, Icon::Line, "Line  (L)", Tool::Line { last: None });
@@ -155,7 +176,9 @@ pub(super) fn ribbon(ctx: &Context, app: &mut AppState) {
             tool_icon(ui, app, Icon::Rectangle, "Rectangle  (REC)", Tool::Rectangle { first: None });
             tool_icon(ui, app, Icon::Polygon, "Polygon  (POL)", Tool::Polygon { center: None, sides: 4 });
             tool_icon(ui, app, Icon::Spline, "Spline  (SPL)", Tool::Spline { pts: vec![] });
+            tool_icon(ui, app, Icon::Text, "Text  (T)", Tool::Text { anchor: None, height: 2.5 });
             ui.separator();
+            group_label(ui, "MODIFY");
 
             // Modify group.
             tool_icon(ui, app, Icon::Move, "Move selection  (M)", Tool::Move { base: None, ids: vec![] });
@@ -172,8 +195,27 @@ pub(super) fn ribbon(ctx: &Context, app: &mut AppState) {
             if crate::icons::icon_button(ui, Icon::Erase, "Erase selection  (E / Del)", false).clicked() {
                 app.erase_selection();
             }
+
+            // Undo/redo at the far right.
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.add_enabled_ui(app.history.can_redo(), |ui| {
+                    if crate::icons::icon_button(ui, Icon::Redo, "Redo  (Ctrl+Y)", false).clicked() {
+                        app.redo();
+                    }
+                });
+                ui.add_enabled_ui(app.history.can_undo(), |ui| {
+                    if crate::icons::icon_button(ui, Icon::Undo, "Undo  (Ctrl+Z)", false).clicked() {
+                        app.undo();
+                    }
+                });
+            });
         });
     });
+}
+
+/// Small dim group caption between ribbon sections.
+fn group_label(ui: &mut egui::Ui, text: &str) {
+    ui.label(egui::RichText::new(text).size(9.5).color(crate::theme::TEXT_DIM));
 }
 
 /// One icon tool button: active-highlighted when it is the current tool.
@@ -189,7 +231,10 @@ fn tool_icon(ui: &mut egui::Ui, app: &mut AppState, icon: crate::icons::Icon, ti
 pub(super) fn status_and_command(ctx: &Context, app: &mut AppState, ui_state: &mut UiState) {
     TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
         ui.horizontal(|ui| {
-            ui.label(format!("⌖ {}", app.coord_readout()));
+            // Monospace + minimum width so the readout doesn't jitter the bar.
+            let coords = egui::RichText::new(format!("{:>22}", app.coord_readout()))
+                .monospace().size(12.0);
+            ui.add(egui::Label::new(coords));
             ui.separator();
             ui.label(format!("Layer: {}", app.current_layer_name()));
             ui.separator();
@@ -234,6 +279,21 @@ pub(super) fn status_and_command(ctx: &Context, app: &mut AppState, ui_state: &m
             ui.label(format!("Units: {}", app.units_label()));
             ui.separator();
             ui.label(format!("Tool: {}", app.tool.name()));
+
+            // Zoom cluster, right-aligned (Figma-style − / fit / +).
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                use crate::icons::{Icon, icon_button_sized};
+                let (cx, cy) = app.view.screen_to_world(app.view.width / 2.0, app.view.height / 2.0);
+                if icon_button_sized(ui, Icon::ZoomIn, "Zoom in", false, 22.0).clicked() {
+                    app.view.zoom_at(cx, cy, 1.25);
+                }
+                if icon_button_sized(ui, Icon::ZoomFit, "Zoom extents — fit the whole drawing", false, 22.0).clicked() {
+                    app.zoom_extents();
+                }
+                if icon_button_sized(ui, Icon::ZoomOut, "Zoom out", false, 22.0).clicked() {
+                    app.view.zoom_at(cx, cy, 0.8);
+                }
+            });
         });
     });
     TopBottomPanel::bottom("command_line").show(ctx, |ui| {
@@ -258,26 +318,40 @@ pub(super) fn status_and_command(ctx: &Context, app: &mut AppState, ui_state: &m
 
 /// A snapshot of one layer row, collected up-front so the list can be iterated
 /// while the panel mutably borrows the document for edits.
-struct LayerRow { idx: usize, name: String, rgb: (u8, u8, u8), on: bool }
+struct LayerRow { idx: usize, name: String, rgb: [u8; 3], on: bool }
 
 pub(super) fn layer_panel(ctx: &Context, app: &mut AppState) {
-    SidePanel::left("layers").default_width(180.0).show(ctx, |ui| {
+    SidePanel::left("layers").default_width(190.0).show(ctx, |ui| {
+        ui.add_space(4.0);
         ui.heading("Layers");
+        ui.add_space(2.0);
         let current = app.document.layers.current;
         let rows: Vec<LayerRow> = app.document.layers.layers.iter().enumerate()
-            .map(|(i, l)| LayerRow { idx: i, name: l.name.clone(), rgb: l.color, on: l.on })
+            .map(|(i, l)| LayerRow {
+                idx: i, name: l.name.clone(),
+                rgb: [l.color.0, l.color.1, l.color.2], on: l.on,
+            })
             .collect();
         for LayerRow { idx: i, name, rgb, on } in rows {
             ui.horizontal(|ui| {
-                let (r, g, b) = rgb;
-                let _swatch = ui.colored_label(Color32::from_rgb(r, g, b), "■");
-                if ui.selectable_label(i == current, &name).clicked() {
+                // Click the swatch to recolour the layer (live).
+                let mut c = rgb;
+                if ui.color_edit_button_srgb(&mut c).changed() {
+                    if let Some(l) = app.document.layers.get_mut(i) {
+                        l.color = (c[0], c[1], c[2]);
+                    }
+                }
+                if ui.selectable_label(i == current, &name)
+                    .on_hover_text("Set as the current drawing layer").clicked() {
                     app.document.layers.current = i;
                 }
-                let mut on_flag = on;
-                if ui.checkbox(&mut on_flag, "").changed() {
-                    if let Some(l) = app.document.layers.get_mut(i) { l.on = on_flag; }
-                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    use crate::icons::{Icon, icon_button_sized};
+                    let icon = if on { Icon::Eye } else { Icon::EyeOff };
+                    if icon_button_sized(ui, icon, "Show / hide this layer", false, 20.0).clicked() {
+                        if let Some(l) = app.document.layers.get_mut(i) { l.on = !on; }
+                    }
+                });
             });
         }
         if ui.button("+ New Layer").clicked() {
@@ -285,11 +359,87 @@ pub(super) fn layer_panel(ctx: &Context, app: &mut AppState) {
             app.document.layers.add(Layer::new(format!("Layer{}", n)));
         }
 
+        ui.add_space(8.0);
         ui.separator();
         ui.heading("Properties");
-        ui.label(format!("Selected: {}", app.selection.len()));
-        ui.label(format!("Entities: {}", app.document.len()));
+        ui.add_space(2.0);
+        selection_properties(ui, app);
     });
+}
+
+/// Illustrator-style selection inspector: shows what is selected and lets the
+/// user re-layer or recolour it without any command.
+fn selection_properties(ui: &mut egui::Ui, app: &mut AppState) {
+    let sel: Vec<_> = app.selection.clone();
+    if sel.is_empty() {
+        ui.label(egui::RichText::new("Nothing selected").color(crate::theme::TEXT_DIM));
+        ui.label(egui::RichText::new(format!("{} entities in drawing", app.document.len()))
+            .size(11.0).color(crate::theme::TEXT_DIM));
+        return;
+    }
+
+    // What is selected.
+    if sel.len() == 1 {
+        if let Some(info) = exact2d_cad::inquiry::list_entity(&app.document, sel[0]) {
+            ui.label(egui::RichText::new(info).size(11.0).monospace());
+        }
+    } else {
+        ui.label(format!("{} entities selected", sel.len()));
+    }
+    ui.add_space(4.0);
+
+    // Layer assignment (applies to the whole selection).
+    let layer_names: Vec<String> =
+        app.document.layers.layers.iter().map(|l| l.name.clone()).collect();
+    let first_layer = sel.first()
+        .and_then(|&id| app.document.get(id)).map(|e| e.layer).unwrap_or(0);
+    let mixed = sel.iter().any(|&id|
+        app.document.get(id).map(|e| e.layer) != Some(first_layer));
+    let mut chosen = first_layer;
+    egui::ComboBox::from_label("Layer")
+        .selected_text(if mixed { "(mixed)".to_string() }
+                       else { layer_names.get(first_layer).cloned().unwrap_or_default() })
+        .show_ui(ui, |ui| {
+            for (i, name) in layer_names.iter().enumerate() {
+                ui.selectable_value(&mut chosen, i, name);
+            }
+        });
+    if chosen != first_layer {
+        app.history.snapshot(&app.document);
+        for &id in &sel {
+            if let Some(e) = app.document.get_mut(id) { e.layer = chosen; }
+        }
+    }
+
+    // Colour override: by-layer or a custom RGB for the selection.
+    let first_color = sel.first()
+        .and_then(|&id| app.document.get(id)).map(|e| e.color.clone());
+    let mut by_layer = matches!(first_color, Some(exact2d_document::Color::ByLayer));
+    if ui.checkbox(&mut by_layer, "Colour by layer").changed() {
+        app.history.snapshot(&app.document);
+        for &id in &sel {
+            if let Some(e) = app.document.get_mut(id) {
+                e.color = if by_layer { exact2d_document::Color::ByLayer }
+                          else { exact2d_document::Color::Rgb(220, 220, 220) };
+            }
+        }
+    }
+    if !by_layer {
+        let mut rgb = match first_color {
+            Some(exact2d_document::Color::Rgb(r, g, b)) => [r, g, b],
+            _ => [220, 220, 220],
+        };
+        ui.horizontal(|ui| {
+            ui.label("Colour");
+            if ui.color_edit_button_srgb(&mut rgb).changed() {
+                for &id in &sel {
+                    if let Some(e) = app.document.get_mut(id) {
+                        e.color = exact2d_document::Color::Rgb(rgb[0], rgb[1], rgb[2]);
+                    }
+                }
+            }
+        });
+    }
 }
 
 // ── File dialog helpers ───────────────────────────────────────────────────────

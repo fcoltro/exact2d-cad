@@ -60,7 +60,7 @@ impl Default for SnapSettings {
         SnapSettings {
             enabled: vec![
                 SnapKind::Endpoint, SnapKind::Midpoint, SnapKind::Center,
-                SnapKind::Intersection, SnapKind::Node, SnapKind::Nearest,
+                SnapKind::Intersection, SnapKind::Perpendicular, SnapKind::Tangent,
             ],
             tolerance: 0.5,
         }

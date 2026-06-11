@@ -1,25 +1,30 @@
 //! Contextual direct-manipulation actions tethered to the selection (the modern
 //! "selection-first, tool-follows" interface). First feature: a corner formed by
-//! two selected lines offers an interactive Fillet/Chamfer you size *visually*
+//! two selected curves offers an interactive Fillet/Chamfer you size *visually*
 //! (drag the cursor to set the radius with a live preview) instead of typing it.
+//! Works for line–line, line–arc, and arc–arc corners (the exact kernel handles
+//! all three); chamfer is offered only for line–line.
 
 use exact2d_document::{EntityId, EntityKind};
 use exact2d_geometry::Curve;
 
 use super::AppState;
 
-/// Geometry of a corner where two selected lines meet at a shared endpoint.
+/// Geometry of a corner where two selected curves meet at a shared endpoint.
 #[derive(Clone, Copy, Debug)]
 pub struct CornerGeom {
     pub a: EntityId,
     pub b: EntityId,
     /// The shared vertex (world).
     pub corner: (f64, f64),
-    /// Unit direction from the corner toward line a's other end, and its length.
+    /// Unit direction from the corner into curve a (tangent for arcs), and the
+    /// usable length along the curve.
     pub dir_a: (f64, f64),
     pub len_a: f64,
     pub dir_b: (f64, f64),
     pub len_b: f64,
+    /// Chamfer only makes sense for line–line corners.
+    pub chamfer_ok: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,43 +84,82 @@ pub fn fillet_arc(corner: Pt, da: Pt, db: Pt, r: f64) -> Option<(Pt, Pt, Pt)> {
     Some((p1, p2, (corner.0 + bx * d, corner.1 + by * d)))
 }
 
-fn line_ends(app: &AppState, id: EntityId) -> Option<((f64, f64), (f64, f64))> {
-    match &app.document.get(id)?.kind {
-        EntityKind::Curve(Curve::Line(l)) => Some((l.p0.to_f64(), l.p1.to_f64())),
-        _ => None,
+/// One free end of a curve: its position, the unit tangent pointing *into* the
+/// curve, the usable length along the curve, and whether the curve is a line.
+struct EndInfo {
+    pos: (f64, f64),
+    dir: (f64, f64),
+    len: f64,
+    is_line: bool,
+}
+
+/// Both ends of a line or (non-closed) circular arc. Other kinds → empty.
+fn curve_ends(app: &AppState, id: EntityId) -> Vec<EndInfo> {
+    let kind = match app.document.get(id) { Some(e) => &e.kind, None => return vec![] };
+    match kind {
+        EntityKind::Curve(Curve::Line(l)) => {
+            let (p0, p1) = (l.p0.to_f64(), l.p1.to_f64());
+            let (dx, dy) = (p1.0 - p0.0, p1.1 - p0.1);
+            let len = (dx * dx + dy * dy).sqrt();
+            if len < 1e-9 { return vec![]; }
+            let d = (dx / len, dy / len);
+            vec![
+                EndInfo { pos: p0, dir: d, len, is_line: true },
+                EndInfo { pos: p1, dir: (-d.0, -d.1), len, is_line: true },
+            ]
+        }
+        EntityKind::Curve(Curve::Arc(a)) => {
+            // Skip (near-)full circles — they have no free ends to fillet.
+            let sweep = a.included_angle();
+            if sweep >= std::f64::consts::TAU - 1e-6 { return vec![]; }
+            let len = a.radius.to_f64() * sweep;
+            if len < 1e-9 { return vec![]; }
+            let (t0, t1) = (a.start_angle, a.end_angle);
+            // CCW parametric tangent is (−sin t, cos t); at the start it points
+            // into the arc, at the end the into-curve direction is its negative.
+            vec![
+                EndInfo { pos: a.start_point(), dir: (-t0.sin(), t0.cos()), len, is_line: false },
+                EndInfo { pos: a.end_point(),   dir: (t1.sin(), -t1.cos()), len, is_line: false },
+            ]
+        }
+        _ => vec![],
     }
 }
 
 impl AppState {
-    /// Detect a fillettable/chamferable corner: exactly two selected line entities
-    /// sharing an endpoint, and not (near-)collinear.
-    pub fn detect_corner(&self) -> Option<CornerGeom> {
-        if self.selection.len() != 2 { return None; }
-        let (a, b) = (self.selection[0], self.selection[1]);
-        let (a0, a1) = line_ends(self, a)?;
-        let (b0, b1) = line_ends(self, b)?;
+    /// Detect every fillettable corner in the selection: any two selected
+    /// lines/arcs sharing an endpoint where the tangents are not (near-)collinear.
+    /// With a whole chain of segments selected this returns one grip per corner.
+    pub fn detect_corners(&self) -> Vec<CornerGeom> {
+        // O(n²) over the selection — cap it so a huge selection stays cheap.
+        if self.selection.len() < 2 || self.selection.len() > 24 { return vec![]; }
+        let ends: Vec<(EntityId, Vec<EndInfo>)> = self.selection.iter()
+            .map(|&id| (id, curve_ends(self, id)))
+            .collect();
 
-        // Find the shared endpoint (the corner) and each line's far end.
         let tol = 1e-6;
-        let near = |p: (f64, f64), q: (f64, f64)| (p.0 - q.0).hypot(p.1 - q.1) < tol;
-        let (corner, oa, ob) = if near(a0, b0) { (a0, a1, b1) }
-            else if near(a0, b1) { (a0, a1, b0) }
-            else if near(a1, b0) { (a1, a0, b1) }
-            else if near(a1, b1) { (a1, a0, b0) }
-            else { return None };
-
-        let mk = |o: (f64, f64)| {
-            let (dx, dy) = (o.0 - corner.0, o.1 - corner.1);
-            let len = (dx * dx + dy * dy).sqrt();
-            if len < 1e-9 { None } else { Some(((dx / len, dy / len), len)) }
-        };
-        let (dir_a, len_a) = mk(oa)?;
-        let (dir_b, len_b) = mk(ob)?;
-
-        let cos = dir_a.0 * dir_b.0 + dir_a.1 * dir_b.1;
-        if cos.abs() > 0.999 { return None; } // collinear → no real corner
-
-        Some(CornerGeom { a, b, corner, dir_a, len_a, dir_b, len_b })
+        let mut out = Vec::new();
+        for i in 0..ends.len() {
+            for j in (i + 1)..ends.len() {
+                let (a, ea) = &ends[i];
+                let (b, eb) = &ends[j];
+                for fa in ea {
+                    for fb in eb {
+                        if (fa.pos.0 - fb.pos.0).hypot(fa.pos.1 - fb.pos.1) >= tol { continue; }
+                        let cos = fa.dir.0 * fb.dir.0 + fa.dir.1 * fb.dir.1;
+                        if cos.abs() > 0.999 { continue; } // tangent/collinear join
+                        out.push(CornerGeom {
+                            a: *a, b: *b,
+                            corner: fa.pos,
+                            dir_a: fa.dir, len_a: fa.len,
+                            dir_b: fb.dir, len_b: fb.len,
+                            chamfer_ok: fa.is_line && fb.is_line,
+                        });
+                    }
+                }
+            }
+        }
+        out
     }
 
     /// Begin a corner action (Inventor-style combined grip). Kind and size are then
@@ -127,10 +171,15 @@ impl AppState {
 
     /// Update the in-progress action from the cursor: moving to the **right** of the
     /// corner chooses Fillet, to the **left** chooses Chamfer; distance sets the size.
+    /// Corners involving an arc only offer Fillet.
     pub fn update_corner_drag(&mut self) {
         if let Some(mut ca) = self.corner_action {
             let (cx, cy) = ca.geom.corner;
-            ca.kind = if self.cursor_world.0 >= cx { CornerKind::Fillet } else { CornerKind::Chamfer };
+            ca.kind = if !ca.geom.chamfer_ok || self.cursor_world.0 >= cx {
+                CornerKind::Fillet
+            } else {
+                CornerKind::Chamfer
+            };
             let d = (self.cursor_world.0 - cx).hypot(self.cursor_world.1 - cy);
             ca.size = d.clamp(1e-3, ca.geom.max_size(ca.kind));
             self.corner_action = Some(ca);

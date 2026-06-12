@@ -2,7 +2,7 @@
 //! TRIM, BREAK, ARRAY. All transforms are exact where the geometry permits.
 
 use exact2d_algebra::Rational;
-use exact2d_geometry::{Curve, CurveSegment, Point2d, Transform2d, LineSeg, CircularArc, offset_curve, intersect_numeric, split_curve};
+use exact2d_geometry::{Curve, CurveSegment, Point2d, Transform2d, LineSeg, CircularArc, offset_curve, intersect_numeric, point_to_curve_distance, split_curve};
 use exact2d_document::{Document, EntityId, EntityKind};
 
 // ── Public commands ────────────────────────────────────────────────────────────
@@ -125,7 +125,25 @@ pub fn trim(doc: &mut Document, target: EntityId, cutters: &[EntityId], px: f64,
     }
     params.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     params.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
-    if params.len() <= 2 { return vec![target]; }
+    if params.len() <= 2 {
+        // No interior cut. If the picked piece is *bounded* by a cutting edge at
+        // an endpoint — the normal state of every leftover right after a trim —
+        // clicking it removes the whole piece (AutoCAD quick-trim behavior).
+        // A piece touching no cutter at all is left alone.
+        let eps = 1e-6;
+        let touches = |x: f64, y: f64| cutters.iter().any(|&cid| {
+            cid != target && doc.get(cid).and_then(|e| e.as_curve())
+                .map(|c| point_to_curve_distance(c, x, y) < eps)
+                .unwrap_or(false)
+        });
+        let (sx, sy) = curve.evaluate_f64(t0);
+        let (ex, ey) = curve.evaluate_f64(t1);
+        if touches(sx, sy) || touches(ex, ey) {
+            doc.remove(target);
+            return vec![];
+        }
+        return vec![target];
+    }
 
     let pick_t = normalized_pick_param(&curve, px, py);
     let mut survivors = Vec::new();
@@ -629,6 +647,61 @@ mod tests {
         assert!(start.elapsed().as_millis() < 500,
             "trim took {:?} — exact kernel is back in the interactive path?", start.elapsed());
         assert_eq!(survivors.len(), 2);
+    }
+
+    /// Regression (user report): zigzag workflow — after the first trim splits a
+    /// curve into pieces bounded by the cutters, clicking another piece must
+    /// remove it too (AutoCAD quick-trim), not silently do nothing.
+    #[test]
+    fn trim_removes_bounded_leftover_pieces() {
+        let mut doc = Document::new();
+        let target = draw::line(&mut doc, pt(0, 0), pt(10, 0));
+        let v: Vec<_> = [2, 5].iter()
+            .map(|&x| draw::line(&mut doc, pt(x, -2), pt(x, 2)))
+            .collect();
+        let first = trim(&mut doc, target, &v, 3.5, 0.0);
+        assert_eq!(first.len(), 2);
+        // Click the left piece [0,2]: bounded by the x=2 cutter → deleted whole.
+        let left = *first.iter().find(|&&id| {
+            matches!(doc.get(id).and_then(|e| e.as_curve()),
+                Some(Curve::Line(l)) if l.p0.x.to_f64().min(l.p1.x.to_f64()) < 1.0)
+        }).expect("left piece exists");
+        let cutters: Vec<_> = doc.iter().map(|e| e.id).filter(|&i| i != left).collect();
+        let second = trim(&mut doc, left, &cutters, 1.0, 0.0);
+        assert!(second.is_empty(), "bounded leftover must be deleted");
+        assert!(doc.get(left).is_none(), "the piece must be gone from the document");
+    }
+
+    /// Same zigzag workflow on an arc: leftover arc pieces bounded by the
+    /// cutters must also be removable with a click.
+    #[test]
+    fn trim_removes_bounded_leftover_arc_piece() {
+        let mut doc = Document::new();
+        let target = draw::arc(&mut doc, pt(0, 0), r(5), 0.0, std::f64::consts::PI);
+        let l1 = draw::line(&mut doc, pt(3, 0), pt(3, 6));
+        let l2 = draw::line(&mut doc, pt(-3, 0), pt(-3, 6));
+        let first = trim(&mut doc, target, &[l1, l2], 0.0, 5.0);
+        assert_eq!(first.len(), 2);
+        // Click the right piece (from (5,0) to (3,4)): bounded at (3,4) → deleted.
+        let right = *first.iter().find(|&&id| {
+            matches!(doc.get(id).and_then(|e| e.as_curve()),
+                Some(Curve::Arc(a)) if a.start_angle < 0.1)
+        }).expect("right piece exists");
+        let cutters: Vec<_> = doc.iter().map(|e| e.id).filter(|&i| i != right).collect();
+        let second = trim(&mut doc, right, &cutters, 4.8, 1.0);
+        assert!(second.is_empty(), "bounded arc piece must be deleted");
+        assert!(doc.get(right).is_none());
+    }
+
+    /// Safety: trim must NOT delete an entity that touches no cutting edge.
+    #[test]
+    fn trim_leaves_untouched_entities_alone() {
+        let mut doc = Document::new();
+        let lonely = draw::line(&mut doc, pt(20, 20), pt(30, 20));
+        let far = draw::line(&mut doc, pt(0, 0), pt(0, 5));
+        let result = trim(&mut doc, lonely, &[far], 25.0, 20.0);
+        assert_eq!(result, vec![lonely], "no intersection, no endpoint contact → no-op");
+        assert!(doc.get(lonely).is_some());
     }
 
     /// Regression (user report): after trimming once, the surviving pieces must

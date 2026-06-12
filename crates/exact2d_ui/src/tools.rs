@@ -104,6 +104,17 @@ impl Tool {
         matches!(self, Tool::Line { .. })
     }
 
+    /// Whether object snapping applies right now. OSNAP is for **point input**
+    /// (placing geometry, base/destination points) — never for **entity picking**
+    /// (Select/Trim/Extend/…), where the snap magnet would both pull the click
+    /// onto the wrong entity (e.g. a cutter's intersection point right after a
+    /// trim) and burn per-frame time projecting onto every entity.
+    pub fn wants_point_snap(&self) -> bool {
+        !matches!(self,
+            Tool::Select | Tool::Trim | Tool::Extend
+            | Tool::Offset { .. } | Tool::Fillet { .. } | Tool::Chamfer { .. })
+    }
+
     /// Feed a (possibly snapped) world point to the tool.
     pub fn on_point(&mut self, p: Point2d) -> ToolEvent {
         match self {

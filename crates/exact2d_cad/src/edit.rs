@@ -631,6 +631,37 @@ mod tests {
         assert_eq!(survivors.len(), 2);
     }
 
+    /// Regression (user report): after trimming once, the surviving pieces must
+    /// remain trimmable at their remaining crossings.
+    #[test]
+    fn trim_same_line_twice() {
+        let mut doc = Document::new();
+        // Horizontal line crossed by verticals at x = 2 and 5.
+        let target = draw::line(&mut doc, pt(0, 0), pt(10, 0));
+        let v: Vec<_> = [2, 5].iter()
+            .map(|&x| draw::line(&mut doc, pt(x, -2), pt(x, 2)))
+            .collect();
+        // First trim: remove the span between x=2 and x=5 (pick x=3.5).
+        let first = trim(&mut doc, target, &v, 3.5, 0.0);
+        assert_eq!(first.len(), 2);
+        // Draw a new cutter at x=8 and trim the surviving [5..10] piece again —
+        // its endpoints come from f64 round-trips and must stay trimmable.
+        let right = *first.iter().find(|&&id| {
+            matches!(doc.get(id).and_then(|e| e.as_curve()),
+                Some(Curve::Line(l)) if l.p0.x.to_f64().max(l.p1.x.to_f64()) > 9.0)
+        }).expect("right piece exists");
+        draw::line(&mut doc, pt(8, -2), pt(8, 2));
+        let cutters: Vec<_> = doc.iter().map(|e| e.id).filter(|&i| i != right).collect();
+        let second = trim(&mut doc, right, &cutters, 6.5, 0.0);
+        assert_eq!(second.len(), 1, "second trim on the same line must still cut");
+        if let Some(Curve::Line(l)) = doc.get(second[0]).and_then(|e| e.as_curve()) {
+            let (x0, x1) = (l.p0.x.to_f64().min(l.p1.x.to_f64()),
+                            l.p0.x.to_f64().max(l.p1.x.to_f64()));
+            assert!((x0 - 8.0).abs() < 1e-6 && (x1 - 10.0).abs() < 1e-6,
+                "expected the [8,10] piece, got [{x0},{x1}]");
+        } else { panic!("survivor is not a line"); }
+    }
+
     /// Regression (user report): trimming an arc crossed by two lines must cut
     /// at BOTH lines and remove only the picked middle span — one cutter was
     /// being ignored because the (Arc, Line) dispatch returned the line's

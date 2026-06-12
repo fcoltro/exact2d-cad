@@ -88,7 +88,7 @@ impl AppState {
     pub fn pointer_moved(&mut self, sx: f64, sy: f64) {
         let (wx, wy) = self.view.screen_to_world(sx, sy);
         
-        self.active_snap = if self.snap_on {
+        self.active_snap = if self.snap_on && self.tool.wants_point_snap() {
             let mut s = self.snap.clone();
             s.tolerance = self.view.pixel_world_size() * 6.0; // ~6px (tighter snap grip)
             let ref_pt = self.tool.reference_point().map(|p| p.to_f64());

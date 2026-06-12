@@ -34,6 +34,27 @@ fn trim_tool_cuts_picked_span() {
     assert_eq!(a.document.len(), before + 1, "trim should split target into two");
 }
 
+/// Regression (user report): with OSNAP on, the snap magnet pulled trim picks
+/// onto cutter intersections/endpoints, so pieces near a previous cut became
+/// un-trimmable. Entity-picking tools must bypass object snap entirely.
+#[test]
+fn trim_ignores_object_snap_when_picking() {
+    let mut a = AppState::new(1200.0, 800.0);
+    a.snap_on = true; // deliberately ON — picking must not be affected
+    a.add_entity(line(0, 0, 10, 0));
+    a.add_entity(line(3, -1, 3, 1));
+    a.add_entity(line(7, -1, 7, 1));
+    let before = a.document.len();
+    a.run_command("TRIM");
+    // Hover near the x=3 crossing: this used to magnet the cursor onto the
+    // intersection and corrupt the subsequent pick.
+    let (sx, sy) = a.view.world_to_screen(3.1, 0.05);
+    a.pointer_moved(sx, sy);
+    assert!(a.active_snap.is_none(), "entity-picking tools must not object-snap");
+    click(&mut a, 5.0, 0.0);
+    assert_eq!(a.document.len(), before + 1, "trim must still cut the picked span");
+}
+
 #[test]
 fn offset_tool_creates_parallel_curve() {
     let mut a = app();

@@ -145,13 +145,23 @@ pub fn trim(doc: &mut Document, target: EntityId, cutters: &[EntityId], px: f64,
         return vec![target];
     }
 
+    // Remove ONLY the picked span — the one between the two cut parameters
+    // adjacent to the pick. Everything on either side stays contiguous (a line
+    // crossed ten times yields two pieces, not ten fragments); the other
+    // crossings remain available for further trims.
     let pick_t = normalized_pick_param(&curve, px, py);
+    let (mut lo, mut hi) = (0.0, 1.0);
+    for w in params.windows(2) {
+        if pick_t >= w[0] && pick_t <= w[1] { lo = w[0]; hi = w[1]; break; }
+    }
     let mut survivors = Vec::new();
     doc.remove(target);
-    for w in params.windows(2) {
-        let (a, b) = (w[0], w[1]);
-        if pick_t > a && pick_t < b { continue; }
-        let piece = extract_piece(&curve, a, b);
+    if lo > 1e-6 {
+        let piece = extract_piece(&curve, 0.0, lo);
+        survivors.push(doc.add_on_layer(EntityKind::Curve(piece), layer));
+    }
+    if hi < 1.0 - 1e-6 {
+        let piece = extract_piece(&curve, hi, 1.0);
         survivors.push(doc.add_on_layer(EntityKind::Curve(piece), layer));
     }
     survivors
@@ -647,6 +657,35 @@ mod tests {
         assert!(start.elapsed().as_millis() < 500,
             "trim took {:?} — exact kernel is back in the interactive path?", start.elapsed());
         assert_eq!(survivors.len(), 2);
+    }
+
+    /// Regression (user report): trim must NOT shatter the target at every
+    /// crossing — only the two boundaries adjacent to the pick cut it, and each
+    /// side stays one contiguous entity (still crossing the other cutters).
+    #[test]
+    fn trim_cuts_only_adjacent_boundaries() {
+        let mut doc = Document::new();
+        let target = draw::line(&mut doc, pt(0, 0), pt(10, 0));
+        let v: Vec<_> = [2, 5, 8].iter()
+            .map(|&x| draw::line(&mut doc, pt(x, -2), pt(x, 2)))
+            .collect();
+        // Pick between x=2 and x=5: only that span goes.
+        let survivors = trim(&mut doc, target, &v, 3.5, 0.0);
+        assert_eq!(survivors.len(), 2, "exactly two contiguous sides, not fragments");
+        let mut spans: Vec<(f64, f64)> = survivors.iter().map(|&id| {
+            match doc.get(id).and_then(|e| e.as_curve()) {
+                Some(Curve::Line(l)) => {
+                    let (a, b) = (l.p0.x.to_f64(), l.p1.x.to_f64());
+                    (a.min(b), a.max(b))
+                }
+                _ => panic!("survivor is not a line"),
+            }
+        }).collect();
+        spans.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        assert!((spans[0].0 - 0.0).abs() < 1e-6 && (spans[0].1 - 2.0).abs() < 1e-6);
+        // The right side must remain ONE piece [5,10] — still crossing x=8.
+        assert!((spans[1].0 - 5.0).abs() < 1e-6 && (spans[1].1 - 10.0).abs() < 1e-6,
+            "right side must stay contiguous across the x=8 cutter, got {:?}", spans[1]);
     }
 
     /// Regression (user report): zigzag workflow — after the first trim splits a

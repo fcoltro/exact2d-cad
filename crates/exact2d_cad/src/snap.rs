@@ -89,6 +89,23 @@ pub fn find_snaps(
     for e in &entities {
         match &e.kind {
             EntityKind::Curve(c) => {
+                // Cheap spatial pre-filter: every curve snap position (endpoint,
+                // midpoint, nearest/perpendicular/tangent foot) lies on the curve,
+                // i.e. inside its bbox — so far-away entities can be skipped
+                // before any projection math. Without this, the golden-section
+                // projections ran on EVERY entity per mouse move and drawing got
+                // slower as the document grew. The arc center is checked
+                // separately (a shallow arc's center lies outside its bbox).
+                let pad = tol * 4.0;
+                let bb = c.bounding_box();
+                let (minx, miny) = bb.min.to_f64();
+                let (maxx, maxy) = bb.max.to_f64();
+                let near_bbox = cursor.0 >= minx - pad && cursor.0 <= maxx + pad
+                    && cursor.1 >= miny - pad && cursor.1 <= maxy + pad;
+                let near_center = on(SnapKind::Center)
+                    && center(c).map(|p| dist(p, cursor) <= tol).unwrap_or(false);
+                if !near_bbox && !near_center { continue; }
+
                 if on(SnapKind::Endpoint) {
                     for p in endpoints(c) { push_if_near(&mut out, SnapKind::Endpoint, p, e.id, cursor, tol); }
                 }

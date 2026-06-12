@@ -659,6 +659,35 @@ mod tests {
         assert_eq!(survivors.len(), 2);
     }
 
+    /// Regression (user report): a polyline-zigzag cutter must register its
+    /// FIRST crossing — the old whole-polyline chord sampling skipped early
+    /// crossings, so picking the start segment trimmed to the SECOND one.
+    #[test]
+    fn trim_against_polyline_zigzag_cuts_at_first_crossing() {
+        use exact2d_geometry::Point2d;
+        let mut doc = Document::new();
+        let target = draw::line(&mut doc, pt(0, 0), pt(10, 0));
+        let mut segs = Vec::new();
+        for i in 0..40 {
+            let x0 = 0.25 * i as f64;
+            let x1 = 0.25 * (i + 1) as f64;
+            let y0 = if i % 2 == 0 { -2.0 } else { 2.0 };
+            segs.push(Curve::Line(exact2d_geometry::LineSeg::from_endpoints(
+                Point2d::from_f64(x0, y0), Point2d::from_f64(x1, -y0))));
+        }
+        let zig = draw::polycurve(&mut doc, segs);
+        // Pick before the first crossing (x = 0.125): only [0, 0.125] is removed.
+        let survivors = trim(&mut doc, target, &[zig], 0.05, 0.0);
+        assert_eq!(survivors.len(), 1);
+        if let Some(Curve::Line(l)) = doc.get(survivors[0]).and_then(|e| e.as_curve()) {
+            let x0 = l.p0.x.to_f64().min(l.p1.x.to_f64());
+            let x1 = l.p0.x.to_f64().max(l.p1.x.to_f64());
+            assert!((x0 - 0.125).abs() < 1e-6,
+                "survivor must start at the FIRST zigzag crossing, got {x0}");
+            assert!((x1 - 10.0).abs() < 1e-6);
+        } else { panic!("survivor is not a line"); }
+    }
+
     /// Regression (user report): trim must NOT shatter the target at every
     /// crossing — only the two boundaries adjacent to the pick cut it, and each
     /// side stays one contiguous entity (still crossing the other cutters).

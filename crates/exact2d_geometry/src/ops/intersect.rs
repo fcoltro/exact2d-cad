@@ -342,6 +342,41 @@ pub fn intersect_general(c1: &Curve, c2: &Curve) -> Vec<CurveIntersection> {
 /// `PolyCurve` (no single-curve implicit form) and for degenerate/identical curves
 /// where the exact resultant path can't apply.
 fn intersect_general_numeric(c1: &Curve, c2: &Curve) -> Vec<CurveIntersection> {
+    // PolyCurves are intersected per segment, with each pair routed through the
+    // full dispatch (so zigzag line segments hit the exact line/line and
+    // line/arc paths). Sampling the WHOLE polyline with a fixed 32 chords cut
+    // corners on many-segment zigzags and silently missed crossings.
+    if let Curve::Poly(p) = c1 {
+        let n = p.segments.len().max(1) as f64;
+        let mut out: Vec<CurveIntersection> = Vec::new();
+        for (i, seg) in p.segments.iter().enumerate() {
+            let (s0, s1) = seg.domain();
+            for h in intersect_numeric(seg, c2) {
+                let local = if (s1 - s0).abs() < 1e-12 { 0.0 } else { (h.t1 - s0) / (s1 - s0) };
+                let global = (i as f64 + local.clamp(0.0, 1.0)) / n;
+                if out.iter().all(|o| (o.point.0 - h.point.0).hypot(o.point.1 - h.point.1) >= 1e-5) {
+                    out.push(CurveIntersection { point: h.point, t1: global, t2: h.t2 });
+                }
+            }
+        }
+        return out;
+    }
+    if let Curve::Poly(p) = c2 {
+        let n = p.segments.len().max(1) as f64;
+        let mut out: Vec<CurveIntersection> = Vec::new();
+        for (i, seg) in p.segments.iter().enumerate() {
+            let (s0, s1) = seg.domain();
+            for h in intersect_numeric(c1, seg) {
+                let local = if (s1 - s0).abs() < 1e-12 { 0.0 } else { (h.t2 - s0) / (s1 - s0) };
+                let global = (i as f64 + local.clamp(0.0, 1.0)) / n;
+                if out.iter().all(|o| (o.point.0 - h.point.0).hypot(o.point.1 - h.point.1) >= 1e-5) {
+                    out.push(CurveIntersection { point: h.point, t1: h.t1, t2: global });
+                }
+            }
+        }
+        return out;
+    }
+
     let (t0_1, t1_1) = c1.domain();
     let (t0_2, t1_2) = c2.domain();
 
@@ -472,6 +507,31 @@ mod tests {
             let (ex, ey) = arc.evaluate_f64(h.t1);
             assert!((ex - h.point.0).abs() < 1e-6 && (ey - h.point.1).abs() < 1e-6,
                 "evaluating the arc at t1 must reproduce the hit point");
+        }
+    }
+
+    /// Regression: a many-segment zigzag POLYLINE must yield every crossing.
+    /// The old fixed 32-chord sampling of the whole polyline cut corners and
+    /// silently dropped hits once the polyline had ~32+ segments.
+    #[test]
+    fn polyline_zigzag_crossings_all_found() {
+        use crate::primitives::PolyCurve;
+        let mut segs = Vec::new();
+        for i in 0..40 {
+            let x0 = 0.25 * i as f64;
+            let x1 = 0.25 * (i + 1) as f64;
+            let y0 = if i % 2 == 0 { -2.0 } else { 2.0 };
+            segs.push(Curve::Line(LineSeg::from_endpoints(
+                Point2d::from_f64(x0, y0), Point2d::from_f64(x1, -y0))));
+        }
+        let poly = Curve::Poly(Box::new(PolyCurve::new(segs)));
+        let line = Curve::Line(LineSeg::from_endpoints(pt(0, 0), pt(10, 0)));
+        let hits = intersect_numeric(&line, &poly);
+        assert_eq!(hits.len(), 40, "every zigzag crossing must be found");
+        for h in &hits {
+            let (x, y) = poly.evaluate_f64(h.t2);
+            assert!((x - h.point.0).abs() < 1e-6 && (y - h.point.1).abs() < 1e-6,
+                "poly param t2 must reproduce the hit point");
         }
     }
 

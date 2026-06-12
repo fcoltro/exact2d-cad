@@ -124,14 +124,14 @@ pub fn intersect_line_circle(line: &LineSeg, arc: &CircularArc) -> Vec<CurveInte
             let dy = yv.to_f64() - arc.center.y.to_f64();
             dy.atan2(dx)
         };
-        let t2 = angle;
         // Check domain restrictions
         let in_segment = (-1e-9..=1.0 + 1e-9).contains(&t1);
         let in_arc = angle_in_arc(angle, arc.start_angle, arc.end_angle);
         if in_segment && in_arc {
             results.push(CurveIntersection {
                 point: (xv.to_f64(), yv.to_f64()),
-                t1, t2,
+                t1,
+                t2: angle_on_domain(angle, arc.start_angle, arc.end_angle),
             });
         }
     }
@@ -145,6 +145,20 @@ fn angle_in_arc(angle: f64, start: f64, end: f64) -> bool {
     let mut span = end - start;
     while span <= 0.0 { span += pi2; }
     a <= span + 1e-9
+}
+
+/// Map a raw `atan2` angle onto the arc's parameter domain: the equivalent
+/// angle in `[start, start+2π)`, clamped to the span. Consumers (trim, split)
+/// treat `t` as a position within `domain()`, so a hit must never be reported
+/// at e.g. −3π/4 on an arc parameterized `[0, 3π/2]` — that's 5π/4 there.
+fn angle_on_domain(angle: f64, start: f64, end: f64) -> f64 {
+    let pi2 = 2.0 * std::f64::consts::PI;
+    let mut a = angle - start;
+    while a < 0.0 { a += pi2; }
+    while a > pi2 { a -= pi2; }
+    let mut span = end - start;
+    while span <= 0.0 { span += pi2; }
+    start + a.min(span)
 }
 
 /// Circle–circle intersection — direct geometric computation.
@@ -191,7 +205,11 @@ pub fn intersect_circle_circle(c1: &CircularArc, c2: &CircularArc) -> Vec<CurveI
 
         if angle_in_arc(angle1, c1.start_angle, c1.end_angle) &&
            angle_in_arc(angle2, c2.start_angle, c2.end_angle) {
-            results.push(CurveIntersection { point: (px, py), t1: angle1, t2: angle2 });
+            results.push(CurveIntersection {
+                point: (px, py),
+                t1: angle_on_domain(angle1, c1.start_angle, c1.end_angle),
+                t2: angle_on_domain(angle2, c2.start_angle, c2.end_angle),
+            });
         }
     }
     results
@@ -383,8 +401,13 @@ pub fn intersect(c1: &Curve, c2: &Curve) -> Vec<CurveIntersection> {
     match (c1, c2) {
         (Curve::Line(l1), Curve::Line(l2)) =>
             intersect_line_line(l1, l2).into_iter().collect(),
-        (Curve::Line(l), Curve::Arc(a)) | (Curve::Arc(a), Curve::Line(l)) =>
+        (Curve::Line(l), Curve::Arc(a)) =>
             intersect_line_circle(l, a),
+        // t1 must be the parameter on c1: swap the line/arc params back.
+        (Curve::Arc(a), Curve::Line(l)) =>
+            intersect_line_circle(l, a).into_iter()
+                .map(|h| CurveIntersection { point: h.point, t1: h.t2, t2: h.t1 })
+                .collect(),
         (Curve::Arc(a1), Curve::Arc(a2)) =>
             intersect_circle_circle(a1, a2),
         _ =>
@@ -405,8 +428,13 @@ pub fn intersect_numeric(c1: &Curve, c2: &Curve) -> Vec<CurveIntersection> {
     match (c1, c2) {
         (Curve::Line(l1), Curve::Line(l2)) =>
             intersect_line_line(l1, l2).into_iter().collect(),
-        (Curve::Line(l), Curve::Arc(a)) | (Curve::Arc(a), Curve::Line(l)) =>
+        (Curve::Line(l), Curve::Arc(a)) =>
             intersect_line_circle(l, a),
+        // t1 must be the parameter on c1: swap the line/arc params back.
+        (Curve::Arc(a), Curve::Line(l)) =>
+            intersect_line_circle(l, a).into_iter()
+                .map(|h| CurveIntersection { point: h.point, t1: h.t2, t2: h.t1 })
+                .collect(),
         (Curve::Arc(a1), Curve::Arc(a2)) =>
             intersect_circle_circle(a1, a2),
         _ =>
@@ -422,6 +450,30 @@ mod tests {
 
     fn r(n: i64) -> Rational { Rational::from(n) }
     fn pt(x: i64, y: i64) -> Point2d { Point2d::from_i64(x, y) }
+
+    /// When the arc is the FIRST argument, t1 must be the arc's parameter,
+    /// normalized into its domain — even past the atan2 seam.
+    #[test]
+    fn arc_first_dispatch_returns_arc_param_in_t1() {
+        use crate::primitives::CircularArc;
+        // 270° arc from angle 0; vertical line cuts it at angle 5π/4 whose raw
+        // atan2 is −3π/4.
+        let arc = Curve::Arc(CircularArc::new(
+            pt(0, 0), r(5), 0.0, 1.5 * std::f64::consts::PI));
+        let x = -5.0 / 2f64.sqrt();
+        let line = Curve::Line(LineSeg::from_endpoints(
+            Point2d::from_f64(x, -6.0), Point2d::from_f64(x, 0.0)));
+        for hits in [intersect(&arc, &line), intersect_numeric(&arc, &line)] {
+            assert_eq!(hits.len(), 1);
+            let h = &hits[0];
+            let expected = 1.25 * std::f64::consts::PI;
+            assert!((h.t1 - expected).abs() < 1e-6,
+                "t1 must be the arc angle 5π/4, got {}", h.t1);
+            let (ex, ey) = arc.evaluate_f64(h.t1);
+            assert!((ex - h.point.0).abs() < 1e-6 && (ey - h.point.1).abs() < 1e-6,
+                "evaluating the arc at t1 must reproduce the hit point");
+        }
+    }
 
     #[test]
     fn line_line_crossing() {

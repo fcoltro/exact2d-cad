@@ -631,6 +631,54 @@ mod tests {
         assert_eq!(survivors.len(), 2);
     }
 
+    /// Regression (user report): trimming an arc crossed by two lines must cut
+    /// at BOTH lines and remove only the picked middle span — one cutter was
+    /// being ignored because the (Arc, Line) dispatch returned the line's
+    /// parameter in t1 instead of the arc angle.
+    #[test]
+    fn trim_arc_between_two_lines() {
+        let mut doc = Document::new();
+        // Upper semicircle r=5 about the origin; verticals at x=±3 cross it at
+        // (±3, 4). Pick the top (0,5) → keep the two outer pieces.
+        let target = draw::arc(&mut doc, pt(0, 0), r(5), 0.0, std::f64::consts::PI);
+        let l1 = draw::line(&mut doc, pt(3, 0), pt(3, 6));
+        let l2 = draw::line(&mut doc, pt(-3, 0), pt(-3, 6));
+        let survivors = trim(&mut doc, target, &[l1, l2], 0.0, 5.0);
+        assert_eq!(survivors.len(), 2, "both line cutters must register");
+        for id in &survivors {
+            if let Some(Curve::Arc(a)) = doc.get(*id).and_then(|e| e.as_curve()) {
+                // Each survivor must stop at one of the cut points (±3, 4).
+                let hits_cut = [a.start_point(), a.end_point()].iter().any(|(x, y)|
+                    (x.abs() - 3.0).abs() < 1e-6 && (y - 4.0).abs() < 1e-6);
+                assert!(hits_cut, "piece does not end at a cut point");
+            } else { panic!("survivor is not an arc"); }
+        }
+    }
+
+    /// Regression (user report): a hit past the atan2 seam (raw angle negative,
+    /// arc domain positive) was dropped or mapped outside the arc, trimming all
+    /// the way to the arc's far end. The 270° arc here is cut at 5π/4.
+    #[test]
+    fn trim_arc_with_wrapped_angle_cut() {
+        let mut doc = Document::new();
+        let target = draw::arc(&mut doc, pt(0, 0), r(5),
+            0.0, 1.5 * std::f64::consts::PI);
+        // Vertical line through the cut point (−5/√2, −5/√2) ≈ angle 5π/4,
+        // whose raw atan2 is −3π/4 (outside the domain until normalized).
+        let x = -5.0 / 2f64.sqrt();
+        let l = draw::line(&mut doc, Point2d::from_f64(x, -6.0), Point2d::from_f64(x, 0.0));
+        // Pick near the arc's end (angle ≈ 4.3 rad) → drop the short end piece.
+        let (px, py) = (5.0 * 4.3f64.cos(), 5.0 * 4.3f64.sin());
+        let survivors = trim(&mut doc, target, &[l], px, py);
+        assert_eq!(survivors.len(), 1, "the wrapped-angle cut must register");
+        assert_ne!(survivors[0], target, "trim must actually split the arc");
+        if let Some(Curve::Arc(a)) = doc.get(survivors[0]).and_then(|e| e.as_curve()) {
+            let expected = 1.25 * std::f64::consts::PI;
+            assert!((a.end_angle - expected).abs() < 1e-3,
+                "survivor must end at 5π/4, got {}", a.end_angle);
+        } else { panic!("survivor is not an arc"); }
+    }
+
     #[test]
     fn move_translates() {
         let mut doc = Document::new();

@@ -1,14 +1,13 @@
 //! Native `.e2d` document format (spec §5.1) — a self-contained, human-readable,
-//! versioned text format. Exact rational coordinates are stored verbatim as
-//! `num/den`, so geometry round-trips with zero loss. Saves are atomic
-//! (write to a temp file, then rename).
+//! versioned text format. Coordinates are f64, written with Rust's shortest
+//! round-trippable formatting, so geometry round-trips bit-exactly. Saves are
+//! atomic (write to a temp file, then rename).
 //!
 //! Pure Rust, no external database engine. The line-based grammar keeps the file
 //! easy to query/repair by hand, which covers the spec's robustness goals.
+//! Older files that stored exact rationals as `num/den` still load (parsed as f64).
 
 use std::io::Write;
-use exact2d_algebra::Rational;
-use exact2d_integer::Integer;
 use exact2d_geometry::{Curve, Point2d, LineSeg, CircularArc, EllipticalArc, CubicBezier, PolyCurve};
 use exact2d_document::{Document, EntityKind, Entity, Layer, Color, LineTypeRef, LineTypeDef, Units};
 
@@ -61,14 +60,14 @@ fn write_entity(s: &mut String, e: &Entity) {
         EntityKind::Curve(Curve::Line(l)) =>
             s.push_str(&format!("E LINE {} {} {} {}\n", layer, color, pt(&l.p0), pt(&l.p1))),
         EntityKind::Curve(Curve::Arc(a)) => {
-            let (cx, cy) = (rat(&a.center.x), rat(&a.center.y));
+            let (cx, cy) = (rat(a.center.x), rat(a.center.y));
             s.push_str(&format!("E ARC {} {} {};{} {} {} {}\n",
-                layer, color, cx, cy, rat(&a.radius), a.start_angle, a.end_angle));
+                layer, color, cx, cy, rat(a.radius), a.start_angle, a.end_angle));
         }
         EntityKind::Curve(Curve::Ellipse(el)) =>
             s.push_str(&format!("E ELLIPSE {} {} {};{} {} {} {} {} {}\n",
-                layer, color, rat(&el.center.x), rat(&el.center.y),
-                rat(&el.semi_major), rat(&el.semi_minor), el.rotation, el.start_angle, el.end_angle)),
+                layer, color, rat(el.center.x), rat(el.center.y),
+                rat(el.semi_major), rat(el.semi_minor), el.rotation, el.start_angle, el.end_angle)),
         EntityKind::Curve(Curve::Bezier(b)) =>
             s.push_str(&format!("E BEZIER {} {} {} {} {} {}\n",
                 layer, color, pt(&b.p0), pt(&b.p1), pt(&b.p2), pt(&b.p3))),
@@ -89,10 +88,10 @@ fn write_segment(s: &mut String, seg: &Curve) {
     match seg {
         Curve::Line(l) => s.push_str(&format!("SEG LINE {} {}\n", pt(&l.p0), pt(&l.p1))),
         Curve::Arc(a) => s.push_str(&format!("SEG ARC {};{} {} {} {}\n",
-            rat(&a.center.x), rat(&a.center.y), rat(&a.radius), a.start_angle, a.end_angle)),
+            rat(a.center.x), rat(a.center.y), rat(a.radius), a.start_angle, a.end_angle)),
         Curve::Bezier(b) => s.push_str(&format!("SEG BEZIER {} {} {} {}\n",
             pt(&b.p0), pt(&b.p1), pt(&b.p2), pt(&b.p3))),
-        _ => s.push_str("SEG LINE 0/1;0/1 0/1;0/1\n"),
+        _ => s.push_str("SEG LINE 0;0 0;0\n"),
     }
 }
 
@@ -153,15 +152,15 @@ fn parse_entity<'a>(
         }
         "ARC" => {
             let c = parse_pt(tok.next());
-            let r = parse_rat(tok.next().unwrap_or("1"));
+            let r = parse_num(tok.next().unwrap_or("1"));
             let start = tok.next().and_then(|v| v.parse().ok()).unwrap_or(0.0);
             let end = tok.next().and_then(|v| v.parse().ok()).unwrap_or(TAU);
             Some(EntityKind::Curve(Curve::Arc(CircularArc::new(c, r, start, end))))
         }
         "ELLIPSE" => {
             let c = parse_pt(tok.next());
-            let major = parse_rat(tok.next().unwrap_or("1"));
-            let minor = parse_rat(tok.next().unwrap_or("1"));
+            let major = parse_num(tok.next().unwrap_or("1"));
+            let minor = parse_num(tok.next().unwrap_or("1"));
             let rot = tok.next().and_then(|v| v.parse().ok()).unwrap_or(0.0);
             let start = tok.next().and_then(|v| v.parse().ok()).unwrap_or(0.0);
             let end = tok.next().and_then(|v| v.parse().ok()).unwrap_or(TAU);
@@ -206,7 +205,7 @@ fn parse_segment(line: &str) -> Option<Curve> {
         "LINE" => Some(Curve::Line(LineSeg::from_endpoints(parse_pt(tok.next()), parse_pt(tok.next())))),
         "ARC" => {
             let c = parse_pt(tok.next());
-            let r = parse_rat(tok.next().unwrap_or("1"));
+            let r = parse_num(tok.next().unwrap_or("1"));
             let start = tok.next().and_then(|v| v.parse().ok()).unwrap_or(0.0);
             let end = tok.next().and_then(|v| v.parse().ok()).unwrap_or(TAU);
             Some(Curve::Arc(CircularArc::new(c, r, start, end)))
@@ -219,23 +218,25 @@ fn parse_segment(line: &str) -> Option<Curve> {
 
 // ── Field helpers ─────────────────────────────────────────────────────────────
 
-fn rat(r: &Rational) -> String { format!("{}", r) }
-fn pt(p: &Point2d) -> String { format!("{};{}", rat(&p.x), rat(&p.y)) }
+/// Format an f64 with Rust's shortest round-trippable representation.
+fn rat(v: f64) -> String { format!("{}", v) }
+fn pt(p: &Point2d) -> String { format!("{};{}", rat(p.x), rat(p.y)) }
 
-fn parse_rat(s: &str) -> Rational {
+/// Parse a coordinate. Accepts plain f64 and (for back-compat) old `num/den` rationals.
+fn parse_num(s: &str) -> f64 {
     if let Some((n, d)) = s.split_once('/') {
-        let ni = Integer::from_dec_str(n).unwrap_or_else(Integer::zero);
-        let di = Integer::from_dec_str(d).unwrap_or_else(Integer::one);
-        Rational::new(ni, di)
+        let n: f64 = n.parse().unwrap_or(0.0);
+        let d: f64 = d.parse().unwrap_or(1.0);
+        if d != 0.0 { n / d } else { 0.0 }
     } else {
-        Rational::from_integer(Integer::from_dec_str(s).unwrap_or_else(Integer::zero))
+        s.parse().unwrap_or(0.0)
     }
 }
 
 fn parse_pt(s: Option<&str>) -> Point2d {
     let s = s.unwrap_or("0;0");
     let (x, y) = s.split_once(';').unwrap_or(("0", "0"));
-    Point2d::new(parse_rat(x), parse_rat(y))
+    Point2d::new(parse_num(x), parse_num(y))
 }
 
 fn color_str(c: &Color) -> String {
@@ -321,19 +322,19 @@ mod tests {
     fn pt_i(x: i64, y: i64) -> Point2d { Point2d::from_i64(x, y) }
 
     #[test]
-    fn roundtrip_exact_rationals() {
+    fn roundtrip_f64_is_lossless() {
         let mut doc = Document::new();
-        // Use an exact 1/3 coordinate to prove no float loss.
-        let third = Rational::new(Integer::from(1i64), Integer::from(3i64));
+        // 1/3 as f64 — shortest round-trip formatting must reproduce the exact bits.
+        let third = 1.0 / 3.0;
         doc.add(EntityKind::Curve(Curve::Line(LineSeg::from_endpoints(
-            Point2d::new(third.clone(), Rational::zero()),
-            Point2d::new(Rational::from(2i64), third.clone())))));
+            Point2d::new(third, 0.0),
+            Point2d::new(2.0, third)))));
 
         let text = to_string(&doc);
         let doc2 = from_string(&text).unwrap();
         let es: Vec<_> = doc2.iter().collect();
         if let Some(Curve::Line(l)) = es[0].as_curve() {
-            assert_eq!(l.p0.x, third);              // EXACT, not 0.333…
+            assert_eq!(l.p0.x, third);              // bit-exact round-trip
             assert_eq!(l.p1.y, third);
         } else { panic!() }
     }
@@ -357,7 +358,7 @@ mod tests {
     fn roundtrip_all_entity_types() {
         let mut doc = Document::new();
         doc.add(EntityKind::Curve(Curve::Line(LineSeg::from_endpoints(pt_i(0,0), pt_i(5,5)))));
-        doc.add(EntityKind::Curve(Curve::Arc(CircularArc::new(pt_i(3,4), Rational::from(5i64), 0.0, TAU))));
+        doc.add(EntityKind::Curve(Curve::Arc(CircularArc::new(pt_i(3,4), 5.0, 0.0, TAU))));
         doc.add(EntityKind::Curve(Curve::Bezier(CubicBezier::new(pt_i(0,0), pt_i(1,2), pt_i(3,2), pt_i(4,0)))));
         doc.add(EntityKind::Point(pt_i(7, 8)));
         doc.add(EntityKind::Text { anchor: pt_i(1,1), content: "hello world".into(), height: 2.5, rotation: 0.0 });
@@ -374,7 +375,7 @@ mod tests {
         let mut doc = Document::new();
         let segs = vec![
             Curve::Line(LineSeg::from_endpoints(pt_i(0,0), pt_i(4,0))),
-            Curve::Arc(CircularArc::new(pt_i(4,2), Rational::from(2i64), -std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2)),
+            Curve::Arc(CircularArc::new(pt_i(4,2), 2.0, -std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2)),
         ];
         doc.add(EntityKind::Curve(Curve::Poly(Box::new(PolyCurve::new(segs)))));
         let doc2 = from_string(&to_string(&doc)).unwrap();

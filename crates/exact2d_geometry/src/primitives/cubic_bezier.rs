@@ -23,12 +23,10 @@ impl CubicBezier {
 
     // ── Bernstein polynomial form (exact Rational) ─────────────────────────────
 
-    /// x(t) as a `UnivariatePoly` in t.
+    /// x(t) as a `UnivariatePoly` in t (f64 control points lifted to Rational).
     pub fn x_poly(&self) -> UnivariatePoly {
-        let (x0, x1, x2, x3) = (
-            self.p0.x.clone(), self.p1.x.clone(),
-            self.p2.x.clone(), self.p3.x.clone(),
-        );
+        let r = Rational::from_f64_approx;
+        let (x0, x1, x2, x3) = (r(self.p0.x), r(self.p1.x), r(self.p2.x), r(self.p3.x));
         // B(t) = x0 + (-3x0+3x1)t + (3x0-6x1+3x2)t² + (-x0+3x1-3x2+x3)t³
         let r3 = Rational::from(3i64);
         let r6 = Rational::from(6i64);
@@ -40,12 +38,10 @@ impl CubicBezier {
         ])
     }
 
-    /// y(t) as a `UnivariatePoly` in t.
+    /// y(t) as a `UnivariatePoly` in t (f64 control points lifted to Rational).
     pub fn y_poly(&self) -> UnivariatePoly {
-        let (y0, y1, y2, y3) = (
-            self.p0.y.clone(), self.p1.y.clone(),
-            self.p2.y.clone(), self.p3.y.clone(),
-        );
+        let r = Rational::from_f64_approx;
+        let (y0, y1, y2, y3) = (r(self.p0.y), r(self.p1.y), r(self.p2.y), r(self.p3.y));
         let r3 = Rational::from(3i64);
         let r6 = Rational::from(6i64);
         UnivariatePoly::from_coeffs(vec![
@@ -56,19 +52,17 @@ impl CubicBezier {
         ])
     }
 
-    /// Exact evaluation at parameter t ∈ [0,1] using the polynomial form.
-    pub fn evaluate_exact(&self, t: &Rational) -> Point2d {
-        Point2d {
-            x: self.x_poly().eval(t),
-            y: self.y_poly().eval(t),
-        }
+    /// Evaluation at parameter t ∈ [0,1].
+    pub fn evaluate_exact(&self, t: f64) -> Point2d {
+        let (x, y) = self.evaluate_f64(t);
+        Point2d::new(x, y)
     }
 
     // ── de Casteljau subdivision ──────────────────────────────────────────────
 
     /// Split into two sub-curves at exact parameter t ∈ (0,1).
     /// Returns (left_curve [0..t], right_curve [t..1]).
-    pub fn split_at_exact(&self, t: &Rational) -> (CubicBezier, CubicBezier) {
+    pub fn split_at_exact(&self, t: f64) -> (CubicBezier, CubicBezier) {
         let lerp = |a: &Point2d, b: &Point2d| a.lerp(b, t);
 
         // Level 1
@@ -82,8 +76,8 @@ impl CubicBezier {
         let s  = lerp(&r0, &r1);
 
         (
-            CubicBezier { p0: self.p0.clone(), p1: q0, p2: r0, p3: s.clone() },
-            CubicBezier { p0: s, p1: r1, p2: q2, p3: self.p3.clone() },
+            CubicBezier { p0: self.p0, p1: q0, p2: r0, p3: s },
+            CubicBezier { p0: s, p1: r1, p2: q2, p3: self.p3 },
         )
     }
 
@@ -99,18 +93,11 @@ impl CubicBezier {
         // Q2 = 2/4*P1 + 2/4*P2 = 1/2*(P1+P2)
         // Q3 = 3/4*P2 + 1/4*P3
         // Q4 = P3
-        let r1 = Rational::from(1i64);
-        let r3 = Rational::from(3i64);
-        let r4 = Rational::from(4i64);
-        let frac14 = r1.clone() / r4.clone();
-        let frac34 = r3.clone() / r4.clone();
-        let frac12 = r1.clone() / Rational::from(2i64);
-
-        let q0 = self.p0.clone();
-        let q1 = self.p0.lerp(&self.p1, &frac34);
-        let q2 = self.p1.lerp(&self.p2, &frac12);
-        let q3 = self.p2.lerp(&self.p3, &frac14);
-        let q4 = self.p3.clone();
+        let q0 = self.p0;
+        let q1 = self.p0.lerp(&self.p1, 0.75);
+        let q2 = self.p1.lerp(&self.p2, 0.5);
+        let q3 = self.p2.lerp(&self.p3, 0.25);
+        let q4 = self.p3;
         [q0, q1, q2, q3, q4]
     }
 
@@ -214,8 +201,8 @@ mod tests {
     #[test]
     fn evaluate_endpoints() {
         let bz = CubicBezier::new(pt(0, 0), pt(1, 2), pt(3, 4), pt(4, 0));
-        let p0 = bz.evaluate_exact(&Rational::zero());
-        let p1 = bz.evaluate_exact(&Rational::one());
+        let p0 = bz.evaluate_exact(0.0);
+        let p1 = bz.evaluate_exact(1.0);
         assert_eq!(p0, pt(0, 0));
         assert_eq!(p1, pt(4, 0));
     }
@@ -223,17 +210,13 @@ mod tests {
     #[test]
     fn split_reconstructs_original() {
         let bz = CubicBezier::new(pt(0, 0), pt(1, 3), pt(3, 3), pt(4, 0));
-        let t_half = Rational::new(
-            exact2d_integer::Integer::one(),
-            exact2d_integer::Integer::from(2i64),
-        );
-        let (left, right) = bz.split_at_exact(&t_half);
+        let (left, right) = bz.split_at_exact(0.5);
         // Endpoints must match
         assert_eq!(left.p0, bz.p0);
         assert_eq!(right.p3, bz.p3);
         // Join point must be on the original curve
-        let mid_orig = bz.evaluate_exact(&t_half);
-        assert_eq!(left.p3, mid_orig.clone());
+        let mid_orig = bz.evaluate_exact(0.5);
+        assert_eq!(left.p3, mid_orig);
         assert_eq!(right.p0, mid_orig);
     }
 
@@ -246,7 +229,7 @@ mod tests {
         assert_eq!(elevated[4], bz.p3);
         // Sample a few interior points and verify they match
         for &t_val in &[0.25f64, 0.5, 0.75] {
-            let orig = bz.evaluate_exact(&Rational::from_f64_approx(t_val));
+            let orig = bz.evaluate_exact(t_val);
             // Elevated should give same point (to float precision)
             let (ox, oy) = orig.to_f64();
             let (ex, ey) = bz.evaluate_f64(t_val);
@@ -285,8 +268,8 @@ mod tests {
         // Control points on a straight horizontal line from (0,0) to (4,0)
         let bz = CubicBezier::new(
             Point2d::from_i64(0, 0),
-            Point2d::new(Rational::new(exact2d_integer::Integer::from(4i64), exact2d_integer::Integer::from(3i64)), Rational::zero()),
-            Point2d::new(Rational::new(exact2d_integer::Integer::from(8i64), exact2d_integer::Integer::from(3i64)), Rational::zero()),
+            Point2d::new(4.0 / 3.0, 0.0),
+            Point2d::new(8.0 / 3.0, 0.0),
             Point2d::from_i64(4, 0),
         );
         // A Bézier on a straight line has length = chord length = 4

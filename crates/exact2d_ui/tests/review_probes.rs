@@ -72,7 +72,7 @@ fn draw_undo_redo_cycle() {
     // Geometry intact after redo.
     let e = a.document.iter().find(|e| e.id != a.origin_id).unwrap();
     if let Some(Curve::Line(l)) = e.as_curve() {
-        assert!((l.p1.x.to_f64() - 4.0).abs() < 1e-4 && (l.p1.y.to_f64() - 3.0).abs() < 1e-4);
+        assert!((l.p1.x - 4.0).abs() < 1e-4 && (l.p1.y - 3.0).abs() < 1e-4);
     } else { panic!(); }
 }
 
@@ -94,7 +94,7 @@ fn copy_command_full_flow() {
     // Original still at y=0; the copy at y=5.
     let ys: Vec<f64> = a.document.iter()
         .filter_map(|e| e.as_curve())
-        .filter_map(|c| if let Curve::Line(l) = c { Some(l.p0.y.to_f64()) } else { None })
+        .filter_map(|c| if let Curve::Line(l) = c { Some(l.p0.y) } else { None })
         .collect();
     assert!(ys.iter().any(|&y| y.abs() < 1e-4), "original at y=0 missing");
     assert!(ys.iter().any(|&y| (y - 5.0).abs() < 1e-4), "copy at y=5 missing");

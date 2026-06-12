@@ -172,14 +172,14 @@ impl AppState {
             let height = *height;
             let need_anchor = anchor.is_none();
             if need_anchor {
-                self.tool = Tool::Text { anchor: Some(p.clone()), height };
+                self.tool = Tool::Text { anchor: Some(p), height };
             }
             return;
         }
 
         // SELECT tool: pick the entity under the cursor and toggle it.
         if matches!(self.tool, Tool::Select) {
-            if let Some(id) = pick_at(&self.document, p.x.to_f64(), p.y.to_f64(),
+            if let Some(id) = pick_at(&self.document, p.x, p.y,
                                       self.view.pixel_world_size() * 6.0) {
                 self.toggle_selection(id);
             } else {
@@ -529,8 +529,6 @@ mod tests {
     use super::*;
     use exact2d_geometry::{Curve, LineSeg};
 
-    fn rat(x: f64) -> exact2d_algebra::Rational { exact2d_algebra::Rational::from_f64_approx(x) }
-
     fn pt(x: i64, y: i64) -> Point2d { Point2d::from_i64(x, y) }
 
     fn app() -> AppState { AppState::new(800.0, 600.0) }
@@ -605,8 +603,8 @@ mod tests {
         a.canvas_click(b2x, b2y);
         // Entity should be translated by (10,5)
         if let Some(Curve::Line(l)) = a.document.get(id).unwrap().as_curve() {
-            assert!((l.p0.x.to_f64() - 10.0).abs() < 1e-4);
-            assert!((l.p0.y.to_f64() - 5.0).abs() < 1e-4);
+            assert!((l.p0.x - 10.0).abs() < 1e-4);
+            assert!((l.p0.y - 5.0).abs() < 1e-4);
         } else { panic!() }
     }
 
@@ -714,10 +712,10 @@ mod tests {
         assert_eq!(a.document.len(), 2);
         let first = a.document.iter().find(|e| e.id != a.origin_id).unwrap();
         if let EntityKind::Curve(Curve::Line(l)) = &first.kind {
-            assert!((l.p0.x.to_f64() - 0.0).abs() < 1e-4);
-            assert!((l.p0.y.to_f64() - 0.0).abs() < 1e-4);
-            assert!((l.p1.x.to_f64() - 6.0).abs() < 1e-4);
-            assert!((l.p1.y.to_f64() - 8.0).abs() < 1e-4);
+            assert!((l.p0.x - 0.0).abs() < 1e-4);
+            assert!((l.p0.y - 0.0).abs() < 1e-4);
+            assert!((l.p1.x - 6.0).abs() < 1e-4);
+            assert!((l.p1.y - 8.0).abs() < 1e-4);
         } else {
             panic!("expected line");
         }
@@ -734,8 +732,8 @@ mod tests {
         assert_eq!(a.document.len(), 2); // origin + one line
         let line = a.document.iter().find(|e| e.id != a.origin_id).unwrap();
         if let EntityKind::Curve(Curve::Line(l)) = &line.kind {
-            assert!((l.p0.x.to_f64()).abs() < 1e-9 && (l.p0.y.to_f64()).abs() < 1e-9);
-            assert!((l.p1.x.to_f64() - 10.0).abs() < 1e-9 && (l.p1.y.to_f64()).abs() < 1e-9);
+            assert!((l.p0.x).abs() < 1e-9 && (l.p0.y).abs() < 1e-9);
+            assert!((l.p1.x - 10.0).abs() < 1e-9 && (l.p1.y).abs() < 1e-9);
         } else {
             panic!("expected line");
         }
@@ -751,8 +749,8 @@ mod tests {
 
         let line = a.document.iter().find(|e| e.id != a.origin_id).unwrap();
         if let EntityKind::Curve(Curve::Line(l)) = &line.kind {
-            assert!((l.p1.x.to_f64()).abs() < 1e-6, "x should be ~0, got {}", l.p1.x.to_f64());
-            assert!((l.p1.y.to_f64() - 5.0).abs() < 1e-6, "y should be ~5, got {}", l.p1.y.to_f64());
+            assert!((l.p1.x).abs() < 1e-6, "x should be ~0, got {}", l.p1.x);
+            assert!((l.p1.y - 5.0).abs() < 1e-6, "y should be ~5, got {}", l.p1.y);
         } else {
             panic!("expected line");
         }
@@ -851,7 +849,7 @@ mod tests {
         assert!(a.document.get(a.origin_id).is_some());
 
         // Try to move origin point
-        let t = exact2d_geometry::Transform2d::translation(rat(10.0), rat(10.0));
+        let t = exact2d_geometry::Transform2d::translation(10.0, 10.0);
         let ev = ToolEvent::Transform { ids: vec![a.origin_id], t };
         a.apply_tool_event(ev);
         if let Some(EntityKind::Point(p)) = a.document.get(a.origin_id).map(|e| &e.kind) {

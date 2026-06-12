@@ -41,7 +41,7 @@ pub fn project_point_onto_curve(curve: &Curve, px: f64, py: f64) -> ProjectionRe
         }
         Arc(a) => {
             let (cx, cy) = a.center.to_f64();
-            let r = a.radius.to_f64();
+            let r = a.radius;
             let angle = (py - cy).atan2(px - cx);
             // Clamp to arc domain
             let angle_clamped = clamp_angle(angle, a.start_angle, a.end_angle);
@@ -157,9 +157,7 @@ mod tests {
     use super::*;
     use crate::primitives::{LineSeg, CircularArc};
     use crate::point::Point2d;
-    use exact2d_algebra::Rational;
 
-    fn r(n: i64) -> Rational { Rational::from(n) }
     fn pt(x: i64, y: i64) -> Point2d { Point2d::from_i64(x, y) }
 
     #[test]
@@ -173,7 +171,7 @@ mod tests {
     #[test]
     fn point_to_circle_distance() {
         // Circle radius 5 centered at origin; point (8, 0): distance = 3
-        let arc = Curve::Arc(CircularArc::new(pt(0,0), r(5),
+        let arc = Curve::Arc(CircularArc::new(pt(0,0), 5.0,
             -std::f64::consts::PI, std::f64::consts::PI));
         let d = point_to_curve_distance(&arc, 8.0, 0.0);
         assert!((d - 3.0).abs() < 1e-6, "d={}", d);
@@ -194,7 +192,7 @@ mod tests {
         // A point at (5, -0.1) is in the gap, but very close to start (0.0).
         // It should project onto (5, 0) corresponding to start_angle = 0.0,
         // rather than incorrectly wrapping to PI because of wrap-around mismatch.
-        let arc = Curve::Arc(CircularArc::new(pt(0,0), r(5), 0.0, std::f64::consts::PI));
+        let arc = Curve::Arc(CircularArc::new(pt(0,0), 5.0, 0.0, std::f64::consts::PI));
         let proj = project_point_onto_curve(&arc, 5.0, -0.1);
         assert!((proj.point.0 - 5.0).abs() < 1e-4);
         assert!((proj.point.1 - 0.0).abs() < 1e-4);

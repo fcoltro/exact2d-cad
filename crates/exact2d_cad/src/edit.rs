@@ -1,7 +1,6 @@
 //! Edit commands (spec §4.3): MOVE, COPY, ROTATE, SCALE, MIRROR, OFFSET, ERASE,
 //! TRIM, BREAK, ARRAY. All transforms are exact where the geometry permits.
 
-use exact2d_algebra::Rational;
 use exact2d_geometry::{Curve, CurveSegment, Point2d, Transform2d, LineSeg, CircularArc, offset_curve, intersect_numeric, point_to_curve_distance, split_curve};
 use exact2d_document::{Document, EntityId, EntityKind};
 
@@ -13,13 +12,13 @@ pub fn erase(doc: &mut Document, ids: &[EntityId]) {
 }
 
 /// MOVE: translate entities in place by (dx, dy).
-pub fn move_by(doc: &mut Document, ids: &[EntityId], dx: Rational, dy: Rational) {
+pub fn move_by(doc: &mut Document, ids: &[EntityId], dx: f64, dy: f64) {
     let t = Transform2d::translation(dx, dy);
     apply_to(doc, ids, &t);
 }
 
 /// COPY: duplicate entities with a displacement; returns the new ids.
-pub fn copy_by(doc: &mut Document, ids: &[EntityId], dx: Rational, dy: Rational) -> Vec<EntityId> {
+pub fn copy_by(doc: &mut Document, ids: &[EntityId], dx: f64, dy: f64) -> Vec<EntityId> {
     let t = Transform2d::translation(dx, dy);
     duplicate_with(doc, ids, &t)
 }
@@ -31,8 +30,8 @@ pub fn rotate(doc: &mut Document, ids: &[EntityId], center: &Point2d, angle: f64
 }
 
 /// SCALE: scale entities about `base` by uniform factor `s` (in place).
-pub fn scale(doc: &mut Document, ids: &[EntityId], base: &Point2d, s: Rational) {
-    let t = Transform2d::scale_about(base, s.clone(), s);
+pub fn scale(doc: &mut Document, ids: &[EntityId], base: &Point2d, s: f64) {
+    let t = Transform2d::scale_about(base, s, s);
     apply_to(doc, ids, &t);
 }
 
@@ -66,13 +65,13 @@ pub fn offset(doc: &mut Document, ids: &[EntityId], dist: f64) -> Vec<EntityId> 
 
 /// Rectangular ARRAY: `rows`×`cols` grid copies spaced (dx, dy). Includes the
 /// original position. Returns all new ids (original excluded).
-pub fn array_rect(doc: &mut Document, ids: &[EntityId], rows: u32, cols: u32, dx: Rational, dy: Rational) -> Vec<EntityId> {
+pub fn array_rect(doc: &mut Document, ids: &[EntityId], rows: u32, cols: u32, dx: f64, dy: f64) -> Vec<EntityId> {
     let mut new_ids = Vec::new();
     for r in 0..rows {
         for c in 0..cols {
             if r == 0 && c == 0 { continue; }
-            let tx = dx.clone() * Rational::from(c as i64);
-            let ty = dy.clone() * Rational::from(r as i64);
+            let tx = dx * c as f64;
+            let ty = dy * r as f64;
             let t = Transform2d::translation(tx, ty);
             new_ids.extend(duplicate_with(doc, ids, &t));
         }
@@ -203,7 +202,7 @@ pub fn extend(doc: &mut Document, target: EntityId, boundary: EntityId, px: f64,
         }
         Some(Curve::Arc(ba)) => {
             let (cx, cy) = ba.center.to_f64();
-            ray_circle_hit(mx, my, ux, uy, cx, cy, ba.radius.to_f64())
+            ray_circle_hit(mx, my, ux, uy, cx, cy, ba.radius)
         }
         _ => None,
     };
@@ -259,7 +258,7 @@ pub fn stretch(doc: &mut Document, ids: &[EntityId], window: (f64, f64, f64, f64
     let inside = |x: f64, y: f64| x >= xmin && x <= xmax && y >= ymin && y <= ymax;
     let nudge = |p: &Point2d| -> Point2d {
         let (x, y) = p.to_f64();
-        if inside(x, y) { Point2d::from_f64(x + dx, y + dy) } else { p.clone() }
+        if inside(x, y) { Point2d::from_f64(x + dx, y + dy) } else { *p }
     };
     for &id in ids {
         if let Some(e) = doc.get_mut(id) {
@@ -413,7 +412,7 @@ fn arc_snap(doc: &Document, id: EntityId) -> Option<ArcSnap> {
     match doc.get(id)?.as_curve()? {
         Curve::Arc(a) => {
             let (cx, cy) = a.center.to_f64();
-            Some(ArcSnap { cx, cy, r: a.radius.to_f64(), start: a.start_angle, end: a.end_angle })
+            Some(ArcSnap { cx, cy, r: a.radius, start: a.start_angle, end: a.end_angle })
         }
         _ => None,
     }
@@ -599,7 +598,7 @@ fn arc_between(center: (f64, f64), ta: (f64, f64), tb: (f64, f64), radius: f64) 
     while sweep <= -std::f64::consts::PI { sweep += std::f64::consts::TAU; a1 += std::f64::consts::TAU; }
     while sweep >   std::f64::consts::PI { sweep -= std::f64::consts::TAU; a1 -= std::f64::consts::TAU; }
     let (start, end) = if a1 >= a0 { (a0, a1) } else { (a1, a0) };
-    CircularArc::new(Point2d::from_f64(center.0, center.1), Rational::from_f64_approx(radius), start, end)
+    CircularArc::new(Point2d::from_f64(center.0, center.1), radius, start, end)
 }
 
 fn apply_to(doc: &mut Document, ids: &[EntityId], t: &Transform2d) {
@@ -662,7 +661,7 @@ mod tests {
     use crate::draw;
 
     fn pt(x: i64, y: i64) -> Point2d { Point2d::from_i64(x, y) }
-    fn r(n: i64) -> Rational { Rational::from(n) }
+    fn r(n: i64) -> f64 { n as f64 }
 
     /// Regression: trimming against Bézier cutters must use the fast numeric
     /// intersector. The exact symbolic kernel took ~seconds per spline pair and
@@ -703,8 +702,8 @@ mod tests {
         let survivors = trim(&mut doc, target, &[zig], 0.05, 0.0);
         assert_eq!(survivors.len(), 1);
         if let Some(Curve::Line(l)) = doc.get(survivors[0]).and_then(|e| e.as_curve()) {
-            let x0 = l.p0.x.to_f64().min(l.p1.x.to_f64());
-            let x1 = l.p0.x.to_f64().max(l.p1.x.to_f64());
+            let x0 = l.p0.x.min(l.p1.x);
+            let x1 = l.p0.x.max(l.p1.x);
             assert!((x0 - 0.125).abs() < 1e-6,
                 "survivor must start at the FIRST zigzag crossing, got {x0}");
             assert!((x1 - 10.0).abs() < 1e-6);
@@ -727,7 +726,7 @@ mod tests {
         let mut spans: Vec<(f64, f64)> = survivors.iter().map(|&id| {
             match doc.get(id).and_then(|e| e.as_curve()) {
                 Some(Curve::Line(l)) => {
-                    let (a, b) = (l.p0.x.to_f64(), l.p1.x.to_f64());
+                    let (a, b) = (l.p0.x, l.p1.x);
                     (a.min(b), a.max(b))
                 }
                 _ => panic!("survivor is not a line"),
@@ -755,7 +754,7 @@ mod tests {
         // Click the left piece [0,2]: bounded by the x=2 cutter → deleted whole.
         let left = *first.iter().find(|&&id| {
             matches!(doc.get(id).and_then(|e| e.as_curve()),
-                Some(Curve::Line(l)) if l.p0.x.to_f64().min(l.p1.x.to_f64()) < 1.0)
+                Some(Curve::Line(l)) if l.p0.x.min(l.p1.x) < 1.0)
         }).expect("left piece exists");
         let cutters: Vec<_> = doc.iter().map(|e| e.id).filter(|&i| i != left).collect();
         let second = trim(&mut doc, left, &cutters, 1.0, 0.0);
@@ -812,15 +811,15 @@ mod tests {
         // its endpoints come from f64 round-trips and must stay trimmable.
         let right = *first.iter().find(|&&id| {
             matches!(doc.get(id).and_then(|e| e.as_curve()),
-                Some(Curve::Line(l)) if l.p0.x.to_f64().max(l.p1.x.to_f64()) > 9.0)
+                Some(Curve::Line(l)) if l.p0.x.max(l.p1.x) > 9.0)
         }).expect("right piece exists");
         draw::line(&mut doc, pt(8, -2), pt(8, 2));
         let cutters: Vec<_> = doc.iter().map(|e| e.id).filter(|&i| i != right).collect();
         let second = trim(&mut doc, right, &cutters, 6.5, 0.0);
         assert_eq!(second.len(), 1, "second trim on the same line must still cut");
         if let Some(Curve::Line(l)) = doc.get(second[0]).and_then(|e| e.as_curve()) {
-            let (x0, x1) = (l.p0.x.to_f64().min(l.p1.x.to_f64()),
-                            l.p0.x.to_f64().max(l.p1.x.to_f64()));
+            let (x0, x1) = (l.p0.x.min(l.p1.x),
+                            l.p0.x.max(l.p1.x));
             assert!((x0 - 8.0).abs() < 1e-6 && (x1 - 10.0).abs() < 1e-6,
                 "expected the [8,10] piece, got [{x0},{x1}]");
         } else { panic!("survivor is not a line"); }
@@ -903,8 +902,8 @@ mod tests {
         let id = draw::line(&mut doc, pt(1,0), pt(2,0));
         rotate(&mut doc, &[id], &pt(0,0), std::f64::consts::FRAC_PI_2);
         if let Curve::Line(l) = doc.get(id).unwrap().as_curve().unwrap() {
-            assert!((l.p0.x.to_f64()).abs() < 1e-9 && (l.p0.y.to_f64() - 1.0).abs() < 1e-6);
-            assert!((l.p1.x.to_f64()).abs() < 1e-9 && (l.p1.y.to_f64() - 2.0).abs() < 1e-6);
+            assert!((l.p0.x).abs() < 1e-9 && (l.p0.y - 1.0).abs() < 1e-6);
+            assert!((l.p1.x).abs() < 1e-9 && (l.p1.y - 2.0).abs() < 1e-6);
         } else { panic!() }
     }
 
@@ -938,7 +937,7 @@ mod tests {
             pt(0,0), r(5), 0.0, 2.0*std::f64::consts::PI))));
         let new = offset(&mut doc, &[id], 2.0);
         if let Curve::Arc(a) = doc.get(new[0]).unwrap().as_curve().unwrap() {
-            assert!((a.radius.to_f64() - 7.0).abs() < 1e-6);
+            assert!((a.radius - 7.0).abs() < 1e-6);
         } else { panic!() }
     }
 
@@ -990,7 +989,7 @@ mod tests {
         if let Curve::Arc(arc) = doc.get(arc_id).unwrap().as_curve().unwrap() {
             let (ccx, ccy) = arc.center.to_f64();
             assert!((ccx - 2.0).abs() < 1e-6 && (ccy - 2.0).abs() < 1e-6, "center ({ccx},{ccy})");
-            assert!((arc.radius.to_f64() - 2.0).abs() < 1e-6);
+            assert!((arc.radius - 2.0).abs() < 1e-6);
         } else { panic!() }
         if let Curve::Line(l) = doc.get(a).unwrap().as_curve().unwrap() {
             let (x, y) = l.p1.to_f64();
@@ -1019,7 +1018,7 @@ mod tests {
             let (cx, cy) = fa.center.to_f64();
             assert!((cx - 15f64.sqrt()).abs() < 1e-3, "fillet cx ≈ √15, got {cx:.5}");
             assert!((cy - 1.0).abs() < 1e-3,          "fillet cy ≈ 1,   got {cy:.5}");
-            assert!((fa.radius.to_f64() - 1.0).abs() < 1e-4);
+            assert!((fa.radius - 1.0).abs() < 1e-4);
         } else { panic!("expected Arc") }
 
         // Line p1 should have moved to the tangent point (√15, 0).
@@ -1049,7 +1048,7 @@ mod tests {
             .expect("arc-arc fillet should succeed");
 
         if let Curve::Arc(fa) = doc.get(fid).unwrap().as_curve().unwrap() {
-            assert!((fa.radius.to_f64() - 1.0).abs() < 1e-4, "fillet arc radius should be 1");
+            assert!((fa.radius - 1.0).abs() < 1e-4, "fillet arc radius should be 1");
             let (fx, fy) = fa.center.to_f64();
             // Fillet centre must lie on circles r±1 from each arc centre.
             let d_a = (fx.powi(2) + (fy - 5.0).powi(2)).sqrt();       // dist to centre A (0,5)

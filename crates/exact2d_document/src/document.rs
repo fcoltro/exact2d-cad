@@ -197,7 +197,6 @@ impl Document {
 mod tests {
     use super::*;
     use exact2d_geometry::{Curve, LineSeg, Transform2d};
-    use exact2d_algebra::Rational;
 
     fn pt(x: i64, y: i64) -> Point2d { Point2d::from_i64(x, y) }
     fn line(x0: i64, y0: i64, x1: i64, y1: i64) -> EntityKind {
@@ -246,7 +245,7 @@ mod tests {
         // Insert it translated by (10, 10)
         let insert = doc.add(EntityKind::Insert {
             block: "tick".into(),
-            transform: Transform2d::translation(Rational::from(10i64), Rational::from(10i64)),
+            transform: Transform2d::translation(10.0, 10.0),
         });
         let exploded = doc.explode_insert(doc.get(insert).unwrap());
         assert_eq!(exploded.len(), 1);

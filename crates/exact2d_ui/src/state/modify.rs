@@ -15,8 +15,8 @@ impl AppState {
     /// for picking and the kernel edit ops, so they live here rather than in `Tool`.
     pub(crate) fn handle_modify_click(&mut self, p: &Point2d) -> bool {
         use exact2d_cad::edit;
-        let px = p.x.to_f64();
-        let py = p.y.to_f64();
+        let px = p.x;
+        let py = p.y;
         let tol = self.view.pixel_world_size() * 6.0;
         let pick = |s: &Self| pick_at(&s.document, px, py, tol).filter(|&id| id != s.origin_id);
 
@@ -108,18 +108,18 @@ impl AppState {
                         let ids = if self.selection.is_empty() {
                             self.document.iter().map(|e| e.id).filter(|&i| i != self.origin_id).collect()
                         } else { self.selection.clone() };
-                        self.tool = Tool::Stretch { c1: Some(p.clone()), c2: None, base: None, ids };
+                        self.tool = Tool::Stretch { c1: Some(*p), c2: None, base: None, ids };
                     }
                     (Some(a), None, _) =>
-                        self.tool = Tool::Stretch { c1: Some(a), c2: Some(p.clone()), base: None, ids },
+                        self.tool = Tool::Stretch { c1: Some(a), c2: Some(*p), base: None, ids },
                     (Some(a), Some(b), None) =>
-                        self.tool = Tool::Stretch { c1: Some(a), c2: Some(b), base: Some(p.clone()), ids },
+                        self.tool = Tool::Stretch { c1: Some(a), c2: Some(b), base: Some(*p), ids },
                     (Some(a), Some(b), Some(bp)) => {
                         let (ax, ay) = a.to_f64();
                         let (bx, by) = b.to_f64();
                         let window = (ax.min(bx), ay.min(by), ax.max(bx), ay.max(by));
-                        let dx = px - bp.x.to_f64();
-                        let dy = py - bp.y.to_f64();
+                        let dx = px - bp.x;
+                        let dy = py - bp.y;
                         self.history.snapshot(&self.document);
                         edit::stretch(&mut self.document, &ids, window, dx, dy);
                         self.tool = Tool::Stretch { c1: None, c2: None, base: None, ids: vec![] };

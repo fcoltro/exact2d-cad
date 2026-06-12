@@ -3,11 +3,13 @@ pub mod curve;
 pub mod primitives;
 pub mod ops;
 pub mod transform;
+pub mod nurbs;
 
 pub use point::{Point2d, BoundingBox};
 pub use curve::{Curve, CurveSegment};
 pub use primitives::{LineSeg, CircularArc, EllipticalArc, CubicBezier, PolyCurve};
 pub use transform::Transform2d;
+pub use nurbs::{RationalBezier, lower, tessellate_curve};
 pub use ops::{
     intersect, intersect_numeric, CurveIntersection,
     intersect_line_line, intersect_line_circle, intersect_circle_circle,

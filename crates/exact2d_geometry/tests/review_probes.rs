@@ -2,7 +2,6 @@
 //! per-module unit tests don't cover.
 
 use exact2d_geometry::*;
-use exact2d_algebra::Rational;
 
 fn pt(x: f64, y: f64) -> Point2d { Point2d::from_f64(x, y) }
 
@@ -64,13 +63,13 @@ fn line_offset_distance_is_exact_at_angle() {
 /// Mirroring an arc across the x-axis must flip it and keep the radius.
 #[test]
 fn mirror_arc_keeps_radius_flips_center() {
-    let arc = Curve::Arc(CircularArc::new(pt(3.0, 4.0), Rational::from(5i64),
+    let arc = Curve::Arc(CircularArc::new(pt(3.0, 4.0), 5.0,
         0.0, std::f64::consts::FRAC_PI_2));
     let t = Transform2d::mirror_x();
     if let Curve::Arc(a) = t.apply_curve(&arc) {
-        assert!((a.center.x.to_f64() - 3.0).abs() < 1e-9);
-        assert!((a.center.y.to_f64() + 4.0).abs() < 1e-9, "center y should flip to -4");
-        assert!((a.radius.to_f64() - 5.0).abs() < 1e-6, "radius preserved");
+        assert!((a.center.x - 3.0).abs() < 1e-9);
+        assert!((a.center.y + 4.0).abs() < 1e-9, "center y should flip to -4");
+        assert!((a.radius - 5.0).abs() < 1e-6, "radius preserved");
         // A point on the mirrored arc must be the mirror of a point on the original.
         let (a0, _) = a.domain();
         let (mx, my) = a.evaluate_f64(a0);
@@ -84,13 +83,13 @@ fn mirror_arc_keeps_radius_flips_center() {
 /// rotation and keep the radius.
 #[test]
 fn rotate_circle_about_point() {
-    let circ = Curve::Arc(CircularArc::new(pt(2.0, 0.0), Rational::from(1i64), 0.0, std::f64::consts::TAU));
+    let circ = Curve::Arc(CircularArc::new(pt(2.0, 0.0), 1.0, 0.0, std::f64::consts::TAU));
     // Rotate 90° about origin → center should go (2,0) → (0,2).
     let t = Transform2d::rotation_about(&pt(0.0, 0.0), std::f64::consts::FRAC_PI_2);
     if let Curve::Arc(a) = t.apply_curve(&circ) {
-        assert!((a.center.x.to_f64()).abs() < 1e-6, "cx≈0, got {}", a.center.x.to_f64());
-        assert!((a.center.y.to_f64() - 2.0).abs() < 1e-6, "cy≈2, got {}", a.center.y.to_f64());
-        assert!((a.radius.to_f64() - 1.0).abs() < 1e-6);
+        assert!((a.center.x).abs() < 1e-6, "cx≈0, got {}", a.center.x);
+        assert!((a.center.y - 2.0).abs() < 1e-6, "cy≈2, got {}", a.center.y);
+        assert!((a.radius - 1.0).abs() < 1e-6);
     } else { panic!(); }
 }
 
@@ -98,7 +97,7 @@ fn rotate_circle_about_point() {
 /// single touch point (not zero, not a spurious pair far apart).
 #[test]
 fn line_circle_tangent_single_touch() {
-    let circle = CircularArc::new(pt(0.0, 0.0), Rational::from(5i64),
+    let circle = CircularArc::new(pt(0.0, 0.0), 5.0,
         -std::f64::consts::PI, std::f64::consts::PI);
     let line = LineSeg::from_endpoints(pt(-10.0, 5.0), pt(10.0, 5.0)); // tangent at (0,5)
     let hits = intersect_line_circle(&line, &circle);

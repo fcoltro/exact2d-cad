@@ -1,36 +1,34 @@
-use exact2d_algebra::Rational;
 use crate::curve::Curve;
 use crate::primitives::{CircularArc, EllipticalArc, CubicBezier, PolyCurve};
 
 /// Split `curve` at parameter `t` into two sub-curves: (before_t, after_t).
 pub fn split_curve(curve: &Curve, t: f64) -> (Curve, Curve) {
-    let t_rat = Rational::from_f64_approx(t);
     match curve {
         Curve::Line(l) => {
-            let (a, b) = l.split_at_exact(&t_rat);
+            let (a, b) = l.split_at_exact(t);
             (Curve::Line(a), Curve::Line(b))
         }
         Curve::Arc(a) => {
             // Split by dividing the angle range at t
             let mid_angle = a.start_angle + t * (a.end_angle - a.start_angle);
-            let left  = CircularArc::new(a.center.clone(), a.radius.clone(), a.start_angle, mid_angle);
-            let right = CircularArc::new(a.center.clone(), a.radius.clone(), mid_angle, a.end_angle);
+            let left  = CircularArc::new(a.center, a.radius, a.start_angle, mid_angle);
+            let right = CircularArc::new(a.center, a.radius, mid_angle, a.end_angle);
             (Curve::Arc(left), Curve::Arc(right))
         }
         Curve::Ellipse(e) => {
             let mid_angle = e.start_angle + t * (e.end_angle - e.start_angle);
             let left = EllipticalArc::new(
-                e.center.clone(), e.semi_major.clone(), e.semi_minor.clone(),
+                e.center, e.semi_major, e.semi_minor,
                 e.rotation, e.start_angle, mid_angle,
             );
             let right = EllipticalArc::new(
-                e.center.clone(), e.semi_major.clone(), e.semi_minor.clone(),
+                e.center, e.semi_major, e.semi_minor,
                 e.rotation, mid_angle, e.end_angle,
             );
             (Curve::Ellipse(left), Curve::Ellipse(right))
         }
         Curve::Bezier(bz) => {
-            let (a, b) = bz.split_at_exact(&t_rat);
+            let (a, b) = bz.split_at_exact(t);
             (Curve::Bezier(a), Curve::Bezier(b))
         }
         Curve::Poly(pc) => {
@@ -64,15 +62,15 @@ pub fn reverse_curve(curve: &Curve) -> Curve {
     match curve {
         Curve::Line(l) => Curve::Line(l.reverse()),
         Curve::Arc(a) => Curve::Arc(CircularArc::new(
-            a.center.clone(), a.radius.clone(),
+            a.center, a.radius,
             a.end_angle, a.start_angle,
         )),
         Curve::Ellipse(e) => Curve::Ellipse(EllipticalArc::new(
-            e.center.clone(), e.semi_major.clone(), e.semi_minor.clone(),
+            e.center, e.semi_major, e.semi_minor,
             e.rotation, e.end_angle, e.start_angle,
         )),
         Curve::Bezier(bz) => Curve::Bezier(CubicBezier::new(
-            bz.p3.clone(), bz.p2.clone(), bz.p1.clone(), bz.p0.clone(),
+            bz.p3, bz.p2, bz.p1, bz.p0,
         )),
         Curve::Poly(pc) => {
             let reversed_segs: Vec<Curve> = pc.segments.iter().rev()

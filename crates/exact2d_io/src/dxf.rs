@@ -2,7 +2,6 @@
 //! (group-code, value) pairs grouped into sections. We support the common 2-D
 //! entities and the LAYER table, mapping everything to the exact algebraic kernel.
 
-use exact2d_algebra::Rational;
 use exact2d_geometry::{
     Curve, CurveSegment, Point2d, LineSeg, CircularArc, EllipticalArc, PolyCurve,
 };
@@ -148,7 +147,7 @@ fn parse_circle(rec: &[Pair]) -> Vec<EntityKind> {
     let (cx, cy) = (get(rec, 10).unwrap_or(0.0), get(rec, 20).unwrap_or(0.0));
     let r = get(rec, 40).unwrap_or(1.0);
     vec![EntityKind::Curve(Curve::Arc(CircularArc::new(
-        Point2d::from_f64(cx, cy), Rational::from_f64_approx(r), 0.0, TAU)))]
+        Point2d::from_f64(cx, cy), r, 0.0, TAU)))]
 }
 
 fn parse_arc(rec: &[Pair]) -> Vec<EntityKind> {
@@ -157,7 +156,7 @@ fn parse_arc(rec: &[Pair]) -> Vec<EntityKind> {
     let start = get(rec, 50).unwrap_or(0.0) * DEG;
     let end = get(rec, 51).unwrap_or(360.0) * DEG;
     vec![EntityKind::Curve(Curve::Arc(CircularArc::new(
-        Point2d::from_f64(cx, cy), Rational::from_f64_approx(r), start, end)))]
+        Point2d::from_f64(cx, cy), r, start, end)))]
 }
 
 fn parse_ellipse(rec: &[Pair]) -> Vec<EntityKind> {
@@ -171,8 +170,8 @@ fn parse_ellipse(rec: &[Pair]) -> Vec<EntityKind> {
     let rotation = my.atan2(mx);
     vec![EntityKind::Curve(Curve::Ellipse(EllipticalArc::new(
         Point2d::from_f64(cx, cy),
-        Rational::from_f64_approx(major),
-        Rational::from_f64_approx(major * ratio),
+        major,
+        major * ratio,
         rotation, start, end)))]
 }
 
@@ -254,7 +253,7 @@ fn bulge_arc(x1: f64, y1: f64, x2: f64, y2: f64, bulge: f64) -> Curve {
     let start = (y1 - cy).atan2(x1 - cx);
     let end = (y2 - cy).atan2(x2 - cx);
     let (start, end) = if bulge > 0.0 { (start, end) } else { (end, start) };
-    Curve::Arc(CircularArc::new(Point2d::from_f64(cx, cy), Rational::from_f64_approx(radius), start, end))
+    Curve::Arc(CircularArc::new(Point2d::from_f64(cx, cy), radius, start, end))
 }
 
 // ── Export ────────────────────────────────────────────────────────────────────
@@ -304,19 +303,19 @@ fn write_entity(w: &mut impl FnMut(i32, &str), kind: &EntityKind, layer: &str) {
             let span = (a.end_angle - a.start_angle).abs();
             if (span - TAU).abs() < 1e-9 {
                 w(0, "CIRCLE"); w(8, layer);
-                w(10, &fmt(cx)); w(20, &fmt(cy)); w(40, &fmt(a.radius.to_f64()));
+                w(10, &fmt(cx)); w(20, &fmt(cy)); w(40, &fmt(a.radius));
             } else {
                 w(0, "ARC"); w(8, layer);
-                w(10, &fmt(cx)); w(20, &fmt(cy)); w(40, &fmt(a.radius.to_f64()));
+                w(10, &fmt(cx)); w(20, &fmt(cy)); w(40, &fmt(a.radius));
                 w(50, &fmt(a.start_angle / DEG)); w(51, &fmt(a.end_angle / DEG));
             }
         }
         EntityKind::Curve(Curve::Ellipse(e)) => {
             let (cx, cy) = e.center.to_f64();
-            let major = e.semi_major.to_f64();
+            let major = e.semi_major;
             let mx = major * e.rotation.cos();
             let my = major * e.rotation.sin();
-            let ratio = if major.abs() > 1e-12 { e.semi_minor.to_f64() / major } else { 1.0 };
+            let ratio = if major.abs() > 1e-12 { e.semi_minor / major } else { 1.0 };
             w(0, "ELLIPSE"); w(8, layer);
             w(10, &fmt(cx)); w(20, &fmt(cy));
             w(11, &fmt(mx)); w(21, &fmt(my));
@@ -419,8 +418,8 @@ mod tests {
         assert_eq!(doc.len(), 1);
         let entities: Vec<_> = doc.iter().collect();
         if let Some(Curve::Line(l)) = entities[0].as_curve() {
-            assert!((l.p1.x.to_f64() - 10.0).abs() < 1e-9);
-            assert!((l.p1.y.to_f64() - 5.0).abs() < 1e-9);
+            assert!((l.p1.x - 10.0).abs() < 1e-9);
+            assert!((l.p1.y - 5.0).abs() < 1e-9);
         } else { panic!("expected line"); }
     }
 
@@ -434,8 +433,8 @@ mod tests {
         assert_eq!(doc.len(), 2);
         let arcs: Vec<_> = doc.iter().filter_map(|e| e.as_curve()).collect();
         if let Curve::Arc(c) = arcs[0] {
-            assert!((c.center.x.to_f64() - 3.0).abs() < 1e-9);
-            assert!((c.radius.to_f64() - 5.0).abs() < 1e-9);
+            assert!((c.center.x - 3.0).abs() < 1e-9);
+            assert!((c.radius - 5.0).abs() < 1e-9);
             assert!((c.included_angle() - TAU).abs() < 1e-6); // full circle
         }
         if let Curve::Arc(a) = arcs[1] {
@@ -447,8 +446,8 @@ mod tests {
     fn roundtrip_line_circle_arc() {
         let mut doc = Document::new();
         doc.add(EntityKind::Curve(Curve::Line(LineSeg::from_endpoints(pt(0,0), pt(10,5)))));
-        doc.add(EntityKind::Curve(Curve::Arc(CircularArc::new(pt(3,4), Rational::from(5i64), 0.0, TAU))));
-        doc.add(EntityKind::Curve(Curve::Arc(CircularArc::new(pt(0,0), Rational::from(2i64),
+        doc.add(EntityKind::Curve(Curve::Arc(CircularArc::new(pt(3,4), 5.0, 0.0, TAU))));
+        doc.add(EntityKind::Curve(Curve::Arc(CircularArc::new(pt(0,0), 2.0,
             0.0, std::f64::consts::FRAC_PI_2))));
 
         let dxf = export_dxf(&doc);
@@ -458,9 +457,9 @@ mod tests {
         // Geometry must survive: compare extents.
         let e1 = doc.extents().unwrap();
         let e2 = doc2.extents().unwrap();
-        assert!((e1.min.x.to_f64() - e2.min.x.to_f64()).abs() < 1e-6);
-        assert!((e1.max.x.to_f64() - e2.max.x.to_f64()).abs() < 1e-6);
-        assert!((e1.max.y.to_f64() - e2.max.y.to_f64()).abs() < 1e-6);
+        assert!((e1.min.x - e2.min.x).abs() < 1e-6);
+        assert!((e1.max.x - e2.max.x).abs() < 1e-6);
+        assert!((e1.max.y - e2.max.y).abs() < 1e-6);
     }
 
     #[test]

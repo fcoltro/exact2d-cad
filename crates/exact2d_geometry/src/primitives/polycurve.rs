@@ -37,23 +37,17 @@ impl PolyCurve {
         let mut i = 0;
         while i < self.segments.len() {
             if let Some(l0) = self.segments[i].as_line() {
-                let mut end = l0.p1.clone();
-                let start = l0.p0.clone();
+                let mut end = l0.p1;
+                let start = l0.p0;
                 let mut j = i + 1;
                 while j < self.segments.len() {
                     if let Some(l1) = self.segments[j].as_line() {
-                        let (tx0, ty0) = (
-                            (l0.p1.x.to_f64() - l0.p0.x.to_f64()),
-                            (l0.p1.y.to_f64() - l0.p0.y.to_f64()),
-                        );
-                        let (tx1, ty1) = (
-                            (l1.p1.x.to_f64() - l1.p0.x.to_f64()),
-                            (l1.p1.y.to_f64() - l1.p0.y.to_f64()),
-                        );
+                        let (tx0, ty0) = (l0.p1.x - l0.p0.x, l0.p1.y - l0.p0.y);
+                        let (tx1, ty1) = (l1.p1.x - l1.p0.x, l1.p1.y - l1.p0.y);
                         let cross = tx0 * ty1 - ty0 * tx1;
                         let len = ((tx0 * tx0 + ty0 * ty0) * (tx1 * tx1 + ty1 * ty1)).sqrt().max(1e-15);
                         if cross.abs() / len < tol {
-                            end = l1.p1.clone();
+                            end = l1.p1;
                             j += 1;
                             continue;
                         }

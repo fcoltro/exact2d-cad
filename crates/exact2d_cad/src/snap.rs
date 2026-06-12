@@ -3,7 +3,6 @@
 //! f64 to the UI either way. (Exact rational math here proved far too slow once
 //! trimmed entities carried float-derived coordinates.)
 
-use exact2d_algebra::Rational;
 use exact2d_geometry::{
     Curve, CurveSegment, Point2d,
     intersect_numeric, project_point_onto_curve,
@@ -147,7 +146,7 @@ pub fn find_snaps(
                 if on(SnapKind::Node) => { push_if_near(&mut out, SnapKind::Node, p.to_f64(), e.id, cursor, tol); }
             EntityKind::Insert { transform, .. }
                 if on(SnapKind::Insertion) => {
-                    let base = transform.apply_point(&Point2d::new(Rational::zero(), Rational::zero()));
+                    let base = transform.apply_point(&Point2d::new(0.0, 0.0));
                     push_if_near(&mut out, SnapKind::Insertion, base.to_f64(), e.id, cursor, tol);
                 }
             _ => {}
@@ -238,12 +237,12 @@ fn fast_bbox_f64(c: &Curve) -> (f64, f64, f64, f64) {
         Curve::Arc(a) => {
             // Full-circle box regardless of span — conservative is fine here.
             let (cx, cy) = a.center.to_f64();
-            let r = a.radius.to_f64();
+            let r = a.radius;
             (cx - r, cy - r, cx + r, cy + r)
         }
         Curve::Ellipse(e) => {
             let (cx, cy) = e.center.to_f64();
-            let r = e.semi_major.to_f64().max(e.semi_minor.to_f64());
+            let r = e.semi_major.max(e.semi_minor);
             (cx - r, cy - r, cx + r, cy + r)
         }
         Curve::Bezier(b) => {
@@ -310,7 +309,7 @@ fn perpendicular_foot(c: &Curve, reference: (f64, f64)) -> Option<(f64, f64)> {
             // The perpendicular from any external point to a circle passes through
             // the center; the foot is where the center→reference ray meets the circle.
             let (cx, cy) = a.center.to_f64();
-            let r = a.radius.to_f64();
+            let r = a.radius;
             let (dx, dy) = (reference.0 - cx, reference.1 - cy);
             let len = (dx * dx + dy * dy).sqrt();
             if len < 1e-12 { return None; }
@@ -341,7 +340,7 @@ fn tangent_points(c: &Curve, reference: (f64, f64)) -> Vec<(f64, f64)> {
             // Geometry: if d = |reference − center| > r, the tangent points lie at
             // angle ± acos(r/d) off the center→reference direction.
             let (cx, cy) = a.center.to_f64();
-            let r = a.radius.to_f64();
+            let r = a.radius;
             let (dx, dy) = (reference.0 - cx, reference.1 - cy);
             let d = (dx * dx + dy * dy).sqrt();
             if d <= r + 1e-12 { return vec![]; } // inside or on the circle
@@ -464,7 +463,7 @@ mod tests {
     fn snap_center_of_circle() {
         let mut doc = Document::new();
         doc.add(EntityKind::Curve(Curve::Arc(CircularArc::new(
-            pt(3, 4), Rational::from(5i64), 0.0, 2.0 * std::f64::consts::PI))));
+            pt(3, 4), 5.0, 0.0, 2.0 * std::f64::consts::PI))));
         let s = SnapSettings { enabled: vec![SnapKind::Center], tolerance: 0.5 };
         let snaps = find_snaps(&doc, (3.2, 4.1), &s, None);
         let c = snaps.iter().find(|sp| sp.kind == SnapKind::Center).unwrap();
@@ -497,7 +496,7 @@ mod tests {
         let mut doc = Document::new();
         // Unit circle at origin
         doc.add(EntityKind::Curve(Curve::Arc(CircularArc::new(
-            pt(0, 0), Rational::from(1i64), 0.0, 2.0 * std::f64::consts::PI))));
+            pt(0, 0), 1.0, 0.0, 2.0 * std::f64::consts::PI))));
         let s = SnapSettings { enabled: vec![SnapKind::Tangent], tolerance: 5.0 };
         // From (2,0): tangent points are at (0.5, ±√3/2)
         let snaps = find_snaps(&doc, (0.5, 0.9), &s, Some((2.0, 0.0)));

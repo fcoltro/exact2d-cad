@@ -1,56 +1,54 @@
-use exact2d_algebra::Rational;
-
-/// A 2-D point with exact rational coordinates.
-#[derive(Clone, Debug, PartialEq)]
+/// A 2-D point with f64 coordinates.
+///
+/// (Phase B of the f64 migration: coordinates are now f64 + tolerance, not exact
+/// rationals. The symbolic `implicit_form()` machinery still exists and lifts these
+/// f64 coordinates to `Rational` on demand — that lift is removed in Phase B2.)
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Point2d {
-    pub x: Rational,
-    pub y: Rational,
+    pub x: f64,
+    pub y: f64,
 }
 
 impl Point2d {
-    pub fn new(x: Rational, y: Rational) -> Self { Point2d { x, y } }
+    pub fn new(x: f64, y: f64) -> Self { Point2d { x, y } }
 
     pub fn from_i64(x: i64, y: i64) -> Self {
-        Point2d { x: Rational::from(x), y: Rational::from(y) }
+        Point2d { x: x as f64, y: y as f64 }
     }
 
     pub fn from_f64(x: f64, y: f64) -> Self {
-        Point2d {
-            x: Rational::from_f64_approx(x),
-            y: Rational::from_f64_approx(y),
-        }
+        Point2d { x, y }
     }
 
     pub fn to_f64(&self) -> (f64, f64) {
-        (self.x.to_f64(), self.y.to_f64())
+        (self.x, self.y)
     }
 
-    /// Exact squared distance.
-    pub fn dist_sq(&self, other: &Point2d) -> Rational {
-        let dx = self.x.clone() - other.x.clone();
-        let dy = self.y.clone() - other.y.clone();
-        dx.clone() * dx + dy.clone() * dy
+    /// Squared distance.
+    pub fn dist_sq(&self, other: &Point2d) -> f64 {
+        let dx = self.x - other.x;
+        let dy = self.y - other.y;
+        dx * dx + dy * dy
     }
 
-    /// Float distance (sqrt of exact squared distance).
+    /// Distance.
     pub fn dist_f64(&self, other: &Point2d) -> f64 {
-        self.dist_sq(other).to_f64().sqrt()
+        self.dist_sq(other).sqrt()
     }
 
-    /// Midpoint (exact).
+    /// Midpoint.
     pub fn midpoint(&self, other: &Point2d) -> Point2d {
         Point2d {
-            x: (self.x.clone() + other.x.clone()) / Rational::from(2i64),
-            y: (self.y.clone() + other.y.clone()) / Rational::from(2i64),
+            x: (self.x + other.x) / 2.0,
+            y: (self.y + other.y) / 2.0,
         }
     }
 
-    /// Linear interpolation: (1-t)*self + t*other  (exact for Rational t).
-    pub fn lerp(&self, other: &Point2d, t: &Rational) -> Point2d {
-        let one_minus_t = Rational::one() - t.clone();
+    /// Linear interpolation: (1-t)*self + t*other.
+    pub fn lerp(&self, other: &Point2d, t: f64) -> Point2d {
         Point2d {
-            x: one_minus_t.clone() * self.x.clone() + t.clone() * other.x.clone(),
-            y: one_minus_t * self.y.clone() + t.clone() * other.y.clone(),
+            x: self.x + t * (other.x - self.x),
+            y: self.y + t * (other.y - self.y),
         }
     }
 }
@@ -63,8 +61,8 @@ impl std::fmt::Display for Point2d {
 
 // ── Bounding box ──────────────────────────────────────────────────────────────
 
-/// Axis-aligned bounding box with exact rational corners.
-#[derive(Clone, Debug, PartialEq)]
+/// Axis-aligned bounding box with f64 corners.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BoundingBox {
     pub min: Point2d,
     pub max: Point2d,
@@ -81,9 +79,7 @@ impl BoundingBox {
     }
 
     pub fn contains_point_f64(&self, x: f64, y: f64) -> bool {
-        let (x0, y0) = self.min.to_f64();
-        let (x1, y1) = self.max.to_f64();
-        x >= x0 && x <= x1 && y >= y0 && y <= y1
+        x >= self.min.x && x <= self.max.x && y >= self.min.y && y <= self.max.y
     }
 
     pub fn intersects(&self, other: &BoundingBox) -> bool {
@@ -92,20 +88,17 @@ impl BoundingBox {
     }
 
     pub fn union(&self, other: &BoundingBox) -> BoundingBox {
-        fn rat_min(a: Rational, b: Rational) -> Rational { if a <= b { a } else { b } }
-        fn rat_max(a: Rational, b: Rational) -> Rational { if a >= b { a } else { b } }
         BoundingBox {
             min: Point2d {
-                x: rat_min(self.min.x.clone(), other.min.x.clone()),
-                y: rat_min(self.min.y.clone(), other.min.y.clone()),
+                x: self.min.x.min(other.min.x),
+                y: self.min.y.min(other.min.y),
             },
             max: Point2d {
-                x: rat_max(self.max.x.clone(), other.max.x.clone()),
-                y: rat_max(self.max.y.clone(), other.max.y.clone()),
+                x: self.max.x.max(other.max.x),
+                y: self.max.y.max(other.max.y),
             },
         }
     }
-
 }
 
 impl std::fmt::Display for BoundingBox {
@@ -124,16 +117,15 @@ mod tests {
         let a = Point2d::from_i64(0, 0);
         let b = Point2d::from_i64(4, 6);
         let m = a.midpoint(&b);
-        assert_eq!(m, Point2d::new(Rational::from(2i64), Rational::from(3i64)));
+        assert_eq!(m, Point2d::new(2.0, 3.0));
     }
 
     #[test]
-    fn lerp_exact() {
+    fn lerp_quarter() {
         let a = Point2d::from_i64(0, 0);
         let b = Point2d::from_i64(10, 10);
-        let t = Rational::new(exact2d_integer::Integer::from(1i64), exact2d_integer::Integer::from(4i64));
-        let p = a.lerp(&b, &t);
-        assert_eq!(p, Point2d::new(Rational::from_f64_approx(2.5), Rational::from_f64_approx(2.5)));
+        let p = a.lerp(&b, 0.25);
+        assert_eq!(p, Point2d::new(2.5, 2.5));
     }
 
     #[test]

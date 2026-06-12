@@ -9,14 +9,14 @@ use crate::curve::CurveSegment;
 /// converted to rational approximations.
 ///
 /// Implicit form: A·x² + B·x·y + C·y² + D·x + E·y + F = 0  with B²−4AC < 0.
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct EllipticalArc {
     /// Center.
     pub center: Point2d,
     /// Semi-major axis length (along the rotated x-axis).
-    pub semi_major: Rational,
+    pub semi_major: f64,
     /// Semi-minor axis length.
-    pub semi_minor: Rational,
+    pub semi_minor: f64,
     /// Rotation angle of the major axis from the positive x-axis (radians).
     pub rotation: f64,
     /// Start and end parametric angles.
@@ -29,8 +29,8 @@ impl EllipticalArc {
 
     pub fn new(
         center: Point2d,
-        semi_major: Rational,
-        semi_minor: Rational,
+        semi_major: f64,
+        semi_minor: f64,
         rotation: f64,
         start_angle: f64,
         end_angle: f64,
@@ -38,11 +38,11 @@ impl EllipticalArc {
         EllipticalArc { center, semi_major, semi_minor, rotation, start_angle, end_angle }
     }
 
-    /// Axis-aligned ellipse (rotation = 0) — all coefficients are exact rationals.
+    /// Axis-aligned ellipse (rotation = 0).
     pub fn axis_aligned(
         center: Point2d,
-        semi_major: Rational,
-        semi_minor: Rational,
+        semi_major: f64,
+        semi_minor: f64,
         start_angle: f64,
         end_angle: f64,
     ) -> Self {
@@ -59,8 +59,8 @@ impl EllipticalArc {
     /// For axis-aligned (rotation≈0) the result is exact rational; otherwise f64.
     #[allow(non_snake_case)] // A,B,C,D,E,F are the standard conic coefficient names
     pub fn conic_coefficients_f64(&self) -> (f64, f64, f64, f64, f64, f64) {
-        let a = self.semi_major.to_f64();
-        let b = self.semi_minor.to_f64();
+        let a = self.semi_major;
+        let b = self.semi_minor;
         let (cx, cy) = self.center.to_f64();
         let phi = self.rotation;
         let cos_phi = phi.cos();
@@ -86,10 +86,11 @@ impl EllipticalArc {
     #[allow(non_snake_case)] // A,B,C,D,E,F are the standard conic coefficient names
     pub fn conic_coefficients_exact(&self) -> Option<(Rational, Rational, Rational, Rational, Rational, Rational)> {
         if self.rotation.abs() > 1e-12 { return None; }
-        let cx = self.center.x.clone();
-        let cy = self.center.y.clone();
-        let a2 = self.semi_major.clone() * self.semi_major.clone();
-        let b2 = self.semi_minor.clone() * self.semi_minor.clone();
+        let r = Rational::from_f64_approx;
+        let cx = r(self.center.x);
+        let cy = r(self.center.y);
+        let a2 = r(self.semi_major * self.semi_major);
+        let b2 = r(self.semi_minor * self.semi_minor);
         // (x-cx)²/a² + (y-cy)²/b² = 1
         // b²(x-cx)² + a²(y-cy)² = a²b²
         // b²x² - 2b²cx·x + b²cx² + a²y² - 2a²cy·y + a²cy² - a²b² = 0
@@ -108,8 +109,8 @@ impl EllipticalArc {
 
     /// Focus points (exact for axis-aligned ellipse).
     pub fn foci(&self) -> ((f64, f64), (f64, f64)) {
-        let a = self.semi_major.to_f64();
-        let b = self.semi_minor.to_f64();
+        let a = self.semi_major;
+        let b = self.semi_minor;
         let c = (a * a - b * b).sqrt();
         let (cx, cy) = self.center.to_f64();
         let phi = self.rotation;
@@ -120,8 +121,8 @@ impl EllipticalArc {
 
     /// Eccentricity e = c/a.
     pub fn eccentricity(&self) -> f64 {
-        let a = self.semi_major.to_f64();
-        let b = self.semi_minor.to_f64();
+        let a = self.semi_major;
+        let b = self.semi_minor;
         let c = (a * a - b * b).max(0.0).sqrt();
         c / a
     }
@@ -165,8 +166,8 @@ impl CurveSegment for EllipticalArc {
 
     fn evaluate_f64(&self, t: f64) -> (f64, f64) {
         let (cx, cy) = self.center.to_f64();
-        let a = self.semi_major.to_f64();
-        let b = self.semi_minor.to_f64();
+        let a = self.semi_major;
+        let b = self.semi_minor;
         let phi = self.rotation;
         let u = a * t.cos();
         let v = b * t.sin();
@@ -192,8 +193,8 @@ impl CurveSegment for EllipticalArc {
     }
 
     fn tangent_f64(&self, t: f64) -> (f64, f64) {
-        let a = self.semi_major.to_f64();
-        let b = self.semi_minor.to_f64();
+        let a = self.semi_major;
+        let b = self.semi_minor;
         let phi = self.rotation;
         let du = -a * t.sin();
         let dv =  b * t.cos();
@@ -228,7 +229,7 @@ mod tests {
     fn axis_aligned_implicit_exact() {
         // (x/3)²+(y/4)²=1 centered at origin
         let ell = EllipticalArc::axis_aligned(
-            Point2d::from_i64(0, 0), r(3), r(4),
+            Point2d::from_i64(0, 0), 3.0, 4.0,
             0.0, 2.0 * std::f64::consts::PI,
         );
         let f = ell.implicit_form();
@@ -245,7 +246,7 @@ mod tests {
     fn foci_axis_aligned() {
         // Ellipse a=5, b=4: c=3, foci at (±3, 0)
         let ell = EllipticalArc::axis_aligned(
-            Point2d::from_i64(0, 0), r(5), r(4),
+            Point2d::from_i64(0, 0), 5.0, 4.0,
             0.0, 2.0 * std::f64::consts::PI,
         );
         let ((f1x, f1y), (f2x, f2y)) = ell.foci();
@@ -259,7 +260,7 @@ mod tests {
     fn eccentricity() {
         // Circle: a=b=5, e=0
         let circle = EllipticalArc::axis_aligned(
-            Point2d::from_i64(0, 0), r(5), r(5),
+            Point2d::from_i64(0, 0), 5.0, 5.0,
             0.0, 2.0 * std::f64::consts::PI,
         );
         assert!(circle.eccentricity().abs() < 1e-10);

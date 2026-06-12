@@ -23,80 +23,75 @@ impl LineSeg {
 
     /// Returns the coefficients (a, b, c) for ax + by + c = 0.
     /// a = y0 - y1,  b = x1 - x0,  c = x0*y1 - x1*y0
+    ///
+    /// Lifts the f64 endpoints to `Rational` so the symbolic kernel keeps working.
     pub fn implicit_coefficients(&self) -> (Rational, Rational, Rational) {
-        let a = self.p0.y.clone() - self.p1.y.clone();
-        let b = self.p1.x.clone() - self.p0.x.clone();
-        let c = self.p0.x.clone() * self.p1.y.clone()
-              - self.p1.x.clone() * self.p0.y.clone();
-        (a, b, c)
+        let a = self.p0.y - self.p1.y;
+        let b = self.p1.x - self.p0.x;
+        let c = self.p0.x * self.p1.y - self.p1.x * self.p0.y;
+        (Rational::from_f64_approx(a), Rational::from_f64_approx(b), Rational::from_f64_approx(c))
     }
 
-    // ── Properties (exact) ────────────────────────────────────────────────────
+    // ── Properties ────────────────────────────────────────────────────────────
 
-    pub fn direction(&self) -> (Rational, Rational) {
-        (self.p1.x.clone() - self.p0.x.clone(), self.p1.y.clone() - self.p0.y.clone())
+    /// Direction vector (dx, dy) = p1 - p0.
+    pub fn direction(&self) -> (f64, f64) {
+        (self.p1.x - self.p0.x, self.p1.y - self.p0.y)
     }
 
     pub fn midpoint(&self) -> Point2d {
         self.p0.midpoint(&self.p1)
     }
 
-    /// Squared length (exact rational).
-    pub fn length_sq(&self) -> Rational {
+    /// Squared length.
+    pub fn length_sq(&self) -> f64 {
         self.p0.dist_sq(&self.p1)
     }
 
-    /// Float length — |p1 - p0|, may be irrational.
+    /// Length — |p1 - p0|.
     pub fn length_f64(&self) -> f64 {
-        self.length_sq().to_f64().sqrt()
+        self.length_sq().sqrt()
     }
 
-    /// Tangent direction (unnormalized, exact): (dx, dy) = p1 - p0.
-    pub fn tangent_exact(&self) -> (Rational, Rational) {
+    /// Tangent direction (unnormalized): (dx, dy) = p1 - p0.
+    pub fn tangent_exact(&self) -> (f64, f64) {
         self.direction()
     }
 
-    /// Normal direction (unnormalized, exact): perpendicular to tangent (CCW).
-    pub fn normal_exact(&self) -> (Rational, Rational) {
+    /// Normal direction (unnormalized): perpendicular to tangent (CCW).
+    pub fn normal_exact(&self) -> (f64, f64) {
         let (dx, dy) = self.direction();
         (-dy, dx)
     }
 
-    /// Evaluate at exact Rational parameter t ∈ [0, 1].
-    pub fn evaluate_exact(&self, t: &Rational) -> Point2d {
+    /// Evaluate at parameter t ∈ [0, 1].
+    pub fn evaluate_exact(&self, t: f64) -> Point2d {
         self.p0.lerp(&self.p1, t)
     }
 
     /// Split into two sub-segments at parameter t ∈ (0, 1).
-    pub fn split_at_exact(&self, t: &Rational) -> (LineSeg, LineSeg) {
+    pub fn split_at_exact(&self, t: f64) -> (LineSeg, LineSeg) {
         let mid = self.evaluate_exact(t);
         (
-            LineSeg { p0: self.p0.clone(), p1: mid.clone() },
-            LineSeg { p0: mid,              p1: self.p1.clone() },
+            LineSeg { p0: self.p0, p1: mid },
+            LineSeg { p0: mid,     p1: self.p1 },
         )
     }
 
     pub fn reverse(&self) -> LineSeg {
-        LineSeg { p0: self.p1.clone(), p1: self.p0.clone() }
+        LineSeg { p0: self.p1, p1: self.p0 }
     }
 
-    /// Exact offset: returns a parallel line segment displaced by `dist` perpendicular.
+    /// Offset: a parallel line segment displaced by `dist` perpendicular.
     /// Positive dist = left side (CCW from direction).
-    pub fn offset_exact(&self, dist: &Rational) -> LineSeg {
+    pub fn offset_exact(&self, dist: f64) -> LineSeg {
         let (nx, ny) = self.normal_exact();
-        // Normalise: scale n by dist / |n|. Since |n| = |direction|, which may be irrational,
-        // we compute the normalisation factor as dist / sqrt(length_sq).
-        // For exact output, we just scale by dist/length_sq * direction length — but that's
-        // irrational. Return a version scaled by dist/(length²) for symbolic use, or use f64.
-        let len_sq = self.length_sq();
-        // Offset by dist * n_hat: n_hat = (nx, ny) / |n| = (nx, ny) / sqrt(len_sq).
-        // We compute the displacement in f64 and convert back to Rational for the points.
-        let scale = dist.to_f64() / len_sq.to_f64().sqrt();
-        let ox = Rational::from_f64_approx(nx.to_f64() * scale);
-        let oy = Rational::from_f64_approx(ny.to_f64() * scale);
+        let len = self.length_f64();
+        let scale = if len > 0.0 { dist / len } else { 0.0 };
+        let (ox, oy) = (nx * scale, ny * scale);
         LineSeg {
-            p0: Point2d { x: self.p0.x.clone() + ox.clone(), y: self.p0.y.clone() + oy.clone() },
-            p1: Point2d { x: self.p1.x.clone() + ox,         y: self.p1.y.clone() + oy },
+            p0: Point2d { x: self.p0.x + ox, y: self.p0.y + oy },
+            p1: Point2d { x: self.p1.x + ox, y: self.p1.y + oy },
         }
     }
 }
@@ -124,14 +119,14 @@ impl CurveSegment for LineSeg {
     fn bounding_box(&self) -> BoundingBox {
         
         let (xmin, xmax) = if self.p0.x <= self.p1.x {
-            (self.p0.x.clone(), self.p1.x.clone())
+            (self.p0.x, self.p1.x)
         } else {
-            (self.p1.x.clone(), self.p0.x.clone())
+            (self.p1.x, self.p0.x)
         };
         let (ymin, ymax) = if self.p0.y <= self.p1.y {
-            (self.p0.y.clone(), self.p1.y.clone())
+            (self.p0.y, self.p1.y)
         } else {
-            (self.p1.y.clone(), self.p0.y.clone())
+            (self.p1.y, self.p0.y)
         };
         BoundingBox {
             min: Point2d { x: xmin, y: ymin },
@@ -140,8 +135,7 @@ impl CurveSegment for LineSeg {
     }
 
     fn tangent_f64(&self, _t: f64) -> (f64, f64) {
-        let (dx, dy) = self.direction();
-        (dx.to_f64(), dy.to_f64())
+        self.direction()
     }
 
     fn arc_length(&self) -> f64 { self.length_f64() }
@@ -188,10 +182,9 @@ mod tests {
     fn midpoint_and_split() {
         let seg = LineSeg::from_endpoints(pt(0, 0), pt(4, 6));
         let m = seg.midpoint();
-        assert_eq!(m, Point2d::new(r(2), r(3)));
+        assert_eq!(m, Point2d::new(2.0, 3.0));
 
-        let t_half = Rational::new(exact2d_integer::Integer::one(), exact2d_integer::Integer::from(2i64));
-        let (left, right) = seg.split_at_exact(&t_half);
+        let (left, right) = seg.split_at_exact(0.5);
         assert_eq!(left.p1, m.clone());
         assert_eq!(right.p0, m);
         assert_eq!(left.p0, pt(0, 0));
@@ -205,7 +198,7 @@ mod tests {
         let (nx, ny) = seg.normal_exact();
         // Dot product must be zero
         let dot = tx * nx + ty * ny;
-        assert!(dot.is_zero());
+        assert!(dot.abs() < 1e-12);
     }
 
     #[test]

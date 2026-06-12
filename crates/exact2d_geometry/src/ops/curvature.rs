@@ -45,9 +45,7 @@ mod tests {
     use super::*;
     use crate::primitives::{LineSeg, CircularArc};
     use crate::point::Point2d;
-    use exact2d_algebra::Rational;
 
-    fn r(n: i64) -> Rational { Rational::from(n) }
     fn pt(x: i64, y: i64) -> Point2d { Point2d::from_i64(x, y) }
 
     #[test]
@@ -55,7 +53,7 @@ mod tests {
         // Circle radius r: κ = 1/r everywhere
         let r_val = 3.0;
         let arc = CircularArc::new(
-            pt(0,0), Rational::from(3i64),
+            pt(0,0), 3.0,
             0.0, 2.0 * std::f64::consts::PI,
         );
         let c = Curve::Arc(arc);
@@ -75,7 +73,7 @@ mod tests {
     #[test]
     fn tangent_perpendicular_to_normal() {
         let arc = Curve::Arc(CircularArc::new(
-            pt(0,0), r(2),
+            pt(0,0), 2.0,
             0.0, 2.0 * std::f64::consts::PI,
         ));
         let (tx, ty) = tangent_at(&arc, 0.0);

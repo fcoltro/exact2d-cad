@@ -91,7 +91,7 @@ fn rotate_tool_turns_selection() {
     click(&mut a, 0.0, 0.0);           // base point
     click(&mut a, 0.0, 1.0);           // 90° direction
     if let Some(Curve::Line(l)) = a.document.get(id).unwrap().as_curve() {
-        assert!(l.p0.x.to_f64().abs() < 1e-4 && (l.p0.y.to_f64() - 1.0).abs() < 1e-4,
+        assert!(l.p0.x.abs() < 1e-4 && (l.p0.y - 1.0).abs() < 1e-4,
             "(1,0) → (0,1), got {:?}", l.p0.to_f64());
     } else { panic!("expected a line") }
 }

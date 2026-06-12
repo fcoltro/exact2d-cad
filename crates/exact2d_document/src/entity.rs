@@ -2,7 +2,6 @@
 //! parameters retained for parametric-like editing.
 
 use exact2d_geometry::{Curve, CurveSegment, BoundingBox, Transform2d, Point2d};
-use exact2d_algebra::Rational;
 use crate::properties::{Color, LineWeight, LineTypeRef, XData};
 
 /// Stable identifier for an entity within a document.
@@ -22,9 +21,9 @@ pub enum EntityKind {
     /// Single-line text anchored at a point, with height and rotation (radians).
     Text { anchor: Point2d, content: String, height: f64, rotation: f64 },
     /// Construction line through a point with a direction (infinite both ways).
-    XLine { through: Point2d, dir: (Rational, Rational) },
+    XLine { through: Point2d, dir: (f64, f64) },
     /// Ray from a point in a direction (infinite one way).
-    Ray { from: Point2d, dir: (Rational, Rational) },
+    Ray { from: Point2d, dir: (f64, f64) },
     /// Block insertion: references a block by name, with an insertion transform.
     Insert { block: String, transform: Transform2d },
 }
@@ -60,7 +59,7 @@ impl Entity {
     pub fn bounding_box(&self) -> Option<BoundingBox> {
         match &self.kind {
             EntityKind::Curve(c) => Some(c.bounding_box()),
-            EntityKind::Point(p) => Some(BoundingBox::new(p.clone(), p.clone())),
+            EntityKind::Point(p) => Some(BoundingBox::new(*p, *p)),
             EntityKind::Text { anchor, height, content, .. } => {
                 // Approximate text extent: width ≈ 0.6·height·len
                 let w = 0.6 * height * content.len() as f64;
@@ -112,11 +111,11 @@ impl Entity {
 }
 
 /// Apply only the linear part of a transform to a direction vector (no translation).
-fn transform_dir(t: &Transform2d, dir: &(Rational, Rational)) -> (Rational, Rational) {
+fn transform_dir(t: &Transform2d, dir: &(f64, f64)) -> (f64, f64) {
     let (dx, dy) = dir;
     (
-        t.m00.clone() * dx.clone() + t.m01.clone() * dy.clone(),
-        t.m10.clone() * dx.clone() + t.m11.clone() * dy.clone(),
+        t.m00 * dx + t.m01 * dy,
+        t.m10 * dx + t.m11 * dy,
     )
 }
 
@@ -140,7 +139,7 @@ mod tests {
     fn move_entity_translates_geometry() {
         let line = Curve::Line(LineSeg::from_endpoints(pt(0, 0), pt(2, 0)));
         let mut e = Entity::new(EntityId(1), EntityKind::Curve(line), 0);
-        e.transform(&Transform2d::translation(Rational::from(5i64), Rational::from(3i64)));
+        e.transform(&Transform2d::translation(5.0, 3.0));
         let c = e.as_curve().unwrap();
         if let Curve::Line(l) = c {
             assert_eq!(l.p0, pt(5, 3));
@@ -152,7 +151,7 @@ mod tests {
     fn transformed_keeps_original() {
         let line = Curve::Line(LineSeg::from_endpoints(pt(0, 0), pt(2, 0)));
         let e = Entity::new(EntityId(1), EntityKind::Curve(line), 0);
-        let moved = e.transformed(&Transform2d::translation(Rational::from(10i64), Rational::zero()));
+        let moved = e.transformed(&Transform2d::translation(10.0, 0.0));
         // Original unchanged
         if let Curve::Line(l) = e.as_curve().unwrap() { assert_eq!(l.p0, pt(0,0)); }
         // Copy moved
@@ -162,7 +161,7 @@ mod tests {
     #[test]
     fn infinite_lines_have_no_bbox() {
         let e = Entity::new(EntityId(1), EntityKind::XLine {
-            through: pt(0,0), dir: (Rational::one(), Rational::zero()),
+            through: pt(0,0), dir: (1.0, 0.0),
         }, 0);
         assert!(e.bounding_box().is_none());
     }

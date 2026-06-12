@@ -4,7 +4,6 @@
 use exact2d_io::{export_dxf, import_dxf, export_svg, import_svg, to_e2d, from_e2d};
 use exact2d_document::{Document, EntityKind};
 use exact2d_geometry::{Curve, LineSeg, CircularArc, Point2d};
-use exact2d_algebra::Rational;
 
 fn pt(x: i64, y: i64) -> Point2d { Point2d::from_i64(x, y) }
 
@@ -15,13 +14,13 @@ fn dxf_arc_sweep_roundtrip() {
     // Quarter arc, center (1,2), r=4, from 30° to 120°.
     let s = 30f64.to_radians();
     let e = 120f64.to_radians();
-    doc.add(EntityKind::Curve(Curve::Arc(CircularArc::new(pt(1,2), Rational::from(4i64), s, e))));
+    doc.add(EntityKind::Curve(Curve::Arc(CircularArc::new(pt(1,2), 4.0, s, e))));
 
     let doc2 = import_dxf(&export_dxf(&doc));
     let es: Vec<_> = doc2.iter().collect();
     if let Some(Curve::Arc(a)) = es[0].as_curve() {
-        assert!((a.center.x.to_f64() - 1.0).abs() < 1e-6);
-        assert!((a.radius.to_f64() - 4.0).abs() < 1e-6);
+        assert!((a.center.x - 1.0).abs() < 1e-6);
+        assert!((a.radius - 4.0).abs() < 1e-6);
         assert!((a.included_angle() - (e - s)).abs() < 1e-4,
             "sweep changed: {} vs {}", a.included_angle(), e - s);
         // Start point must match.
@@ -39,7 +38,7 @@ fn svg_arc_roundtrip() {
     let mut doc = Document::new();
     let s = 20f64.to_radians();
     let e = 100f64.to_radians();
-    let arc = CircularArc::new(pt(3,3), Rational::from(5i64), s, e);
+    let arc = CircularArc::new(pt(3,3), 5.0, s, e);
     let (sx, sy) = arc.start_point();
     let (ex, ey) = arc.end_point();
     doc.add(EntityKind::Curve(Curve::Arc(arc)));
@@ -49,7 +48,7 @@ fn svg_arc_roundtrip() {
     let doc2 = import_svg(&svg);
     let es: Vec<_> = doc2.iter().collect();
     if let Some(Curve::Arc(a)) = es[0].as_curve() {
-        assert!((a.radius.to_f64() - 5.0).abs() < 1e-2, "radius={}", a.radius.to_f64());
+        assert!((a.radius - 5.0).abs() < 1e-2, "radius={}", a.radius);
         // The arc must pass through both original endpoints.
         let (ns0, ns1) = a.start_point();
         let (ne0, ne1) = a.end_point();
@@ -69,7 +68,7 @@ fn native_multi_entity_fidelity() {
     doc.layers.add(exact2d_document::Layer::new("detail").with_color(0, 255, 0));
     let detail = doc.layers.index_of("detail").unwrap();
     doc.add(EntityKind::Curve(Curve::Line(LineSeg::from_endpoints(pt(0,0), pt(10,0)))));
-    doc.add_on_layer(EntityKind::Curve(Curve::Arc(CircularArc::new(pt(5,5), Rational::from(3i64),
+    doc.add_on_layer(EntityKind::Curve(Curve::Arc(CircularArc::new(pt(5,5), 3.0,
         0.0, std::f64::consts::PI))), detail);
     doc.add(EntityKind::Point(pt(7, 8)));
 

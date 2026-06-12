@@ -5,7 +5,6 @@
 //! code, and combinations that the unit tests don't cover.
 
 use exact2d_geometry::*;
-use exact2d_algebra::Rational;
 
 fn pt(x: i64, y: i64) -> Point2d { Point2d::from_i64(x, y) }
 
@@ -39,7 +38,7 @@ fn bezier_bezier_intersection_via_resultant() {
 #[test]
 fn line_tangent_to_circle_gives_one_point() {
     // Circle radius 5 at origin; horizontal line y=5 is tangent at (0,5).
-    let circle = CircularArc::new(pt(0,0), Rational::from(5i64),
+    let circle = CircularArc::new(pt(0,0), 5.0,
         0.0, 2.0*std::f64::consts::PI);
     let line = LineSeg::from_endpoints(pt(-8, 5), pt(8, 5));
     let hits = intersect_line_circle(&line, &circle);
@@ -59,13 +58,11 @@ fn curvature_of_parabola_at_vertex() {
     // Build it as a Bézier approximation won't be exact; use the implicit directly via
     // a cubic Bézier that traces y=x² over a small range and check curvature near vertex.
     // Control points for y=x² on [-1,1]: P0=(-1,1) P1=(-1/3,-1/3) P2=(1/3,-1/3) P3=(1,1)
-    let r = |n: i64, d: i64| Rational::new(
-        exact2d_integer::Integer::from(n), exact2d_integer::Integer::from(d));
     let para = Curve::Bezier(CubicBezier::new(
-        Point2d::new(r(-1,1), r(1,1)),
-        Point2d::new(r(-1,3), r(-1,3)),
-        Point2d::new(r(1,3),  r(-1,3)),
-        Point2d::new(r(1,1),  r(1,1)),
+        Point2d::new(-1.0, 1.0),
+        Point2d::new(-1.0/3.0, -1.0/3.0),
+        Point2d::new(1.0/3.0,  -1.0/3.0),
+        Point2d::new(1.0, 1.0),
     ));
     // At t=0.5 the Bézier is at the vertex (0, ~-? ) — check curvature is finite & nonzero
     let k = curvature_at(&para, 0.5);
@@ -78,13 +75,13 @@ fn curvature_of_parabola_at_vertex() {
 
 #[test]
 fn offset_circle_is_concentric_and_correct_radius() {
-    let circle = Curve::Arc(CircularArc::new(pt(10, 20), Rational::from(7i64),
+    let circle = Curve::Arc(CircularArc::new(pt(10, 20), 7.0,
         0.0, 2.0*std::f64::consts::PI));
     let outer = offset_curve(&circle, 3.0);
     if let Curve::Arc(a) = outer {
         let (cx, cy) = a.center.to_f64();
         assert!((cx - 10.0).abs() < 1e-6 && (cy - 20.0).abs() < 1e-6, "center moved");
-        assert!((a.radius.to_f64() - 10.0).abs() < 1e-6, "radius should be 7+3=10");
+        assert!((a.radius - 10.0).abs() < 1e-6, "radius should be 7+3=10");
     } else { panic!("offset of arc should be an arc"); }
 }
 
@@ -122,7 +119,7 @@ fn three_point_circle_exact_center() {
     let arc = CircularArc::from_three_points(&p1, &p2, &p3).expect("non-collinear");
     let (cx, cy) = arc.center.to_f64();
     assert!(cx.abs() < 1e-9 && cy.abs() < 1e-9, "center should be origin, got ({},{})", cx, cy);
-    assert!((arc.radius.to_f64() - 1.0).abs() < 1e-6, "radius should be 1");
+    assert!((arc.radius - 1.0).abs() < 1e-6, "radius should be 1");
 }
 
 // ── §2.1 Collinear three points → no circle ───────────────────────────────────

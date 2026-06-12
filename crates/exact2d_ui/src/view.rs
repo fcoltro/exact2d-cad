@@ -642,7 +642,7 @@ fn canvas(ctx: &Context, app: &mut AppState, ui_state: &mut UiState, palette_ope
                         } else if pts.len() == 2 {
                             match exact2d_geometry::CircularArc::from_three_points(&pts[0], &pts[1], &cursor) {
                                 Some(arc) => {
-                                    let r = arc.radius.to_f64();
+                                    let r = arc.radius;
                                     Some(format!("R: {:.4}", r))
                                 }
                                 None => Some("Collinear".to_string()),
@@ -1000,7 +1000,6 @@ fn draw_transform_ghost(
     app: &AppState,
     to_screen: &impl Fn(f64, f64) -> egui::Pos2,
 ) {
-    use exact2d_algebra::Rational;
     use exact2d_geometry::Transform2d;
     let (cx, cy) = app.cursor_world;
     let ghost = Stroke::new(1.5, Color32::from_rgba_unmultiplied(0, 200, 255, 128));
@@ -1019,11 +1018,10 @@ fn draw_transform_ghost(
         return;
     }
 
-    let rat = |v: f64| Rational::from_f64_approx(v);
     let (t, ids): (Transform2d, &Vec<exact2d_document::EntityId>) = match &app.tool {
         Tool::Move { base: Some(b), ids } | Tool::Copy { base: Some(b), ids } => {
             let (bx, by) = b.to_f64();
-            (Transform2d::translation(rat(cx - bx), rat(cy - by)), ids)
+            (Transform2d::translation(cx - bx, cy - by), ids)
         }
         Tool::Rotate { base: Some(b), ids } => {
             let (bx, by) = b.to_f64();
@@ -1031,8 +1029,7 @@ fn draw_transform_ghost(
         }
         Tool::Scale { base: Some(b), reference: Some(r1), ids } => {
             let factor = (b.dist_f64(&Point2d::from_f64(cx, cy)) / r1).max(1e-9);
-            let f = rat(factor);
-            (Transform2d::scale_about(b, f.clone(), f), ids)
+            (Transform2d::scale_about(b, factor, factor), ids)
         }
         Tool::Mirror { first: Some(f), ids } => {
             let (fx, fy) = f.to_f64();
@@ -1198,7 +1195,7 @@ mod tess_tests {
 
     fn circle(r: f64) -> Curve {
         Curve::Arc(CircularArc::new(Point2d::from_i64(0, 0),
-            exact2d_algebra::Rational::from_f64_approx(r), 0.0, std::f64::consts::TAU))
+            r, 0.0, std::f64::consts::TAU))
     }
 
     fn screen_polyline(view: &ViewTransform, c: &Curve) -> Vec<egui::Pos2> {

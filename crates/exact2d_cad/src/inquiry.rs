@@ -1,13 +1,12 @@
 //! Inquiry commands (spec §4.3): DISTANCE, AREA, LIST, ID, MEASUREGEOM.
 
-use exact2d_algebra::Rational;
 use exact2d_geometry::{Curve, CurveSegment, Point2d, curve_to_curve_distance};
 use exact2d_document::{Document, EntityId, EntityKind};
 
-/// DISTANCE between two points — exact squared distance + f64 distance.
-pub fn distance_points(a: &Point2d, b: &Point2d) -> (Rational, f64) {
+/// DISTANCE between two points — squared distance + distance.
+pub fn distance_points(a: &Point2d, b: &Point2d) -> (f64, f64) {
     let dsq = a.dist_sq(b);
-    (dsq.clone(), dsq.to_f64().sqrt())
+    (dsq, dsq.sqrt())
 }
 
 /// DISTANCE between two entities (closest approach, f64).
@@ -76,12 +75,11 @@ mod tests {
     use exact2d_geometry::LineSeg;
 
     fn pt(x: i64, y: i64) -> Point2d { Point2d::from_i64(x, y) }
-    fn r(n: i64) -> Rational { Rational::from(n) }
 
     #[test]
     fn distance_3_4_5() {
         let (dsq, d) = distance_points(&pt(0,0), &pt(3,4));
-        assert_eq!(dsq, r(25));
+        assert!((dsq - 25.0).abs() < 1e-9);
         assert!((d - 5.0).abs() < 1e-9);
     }
 

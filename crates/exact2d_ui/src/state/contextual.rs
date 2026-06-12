@@ -112,7 +112,7 @@ fn curve_ends(app: &AppState, id: EntityId) -> Vec<EndInfo> {
             // Skip (near-)full circles — they have no free ends to fillet.
             let sweep = a.included_angle();
             if sweep >= std::f64::consts::TAU - 1e-6 { return vec![]; }
-            let len = a.radius.to_f64() * sweep;
+            let len = a.radius * sweep;
             if len < 1e-9 { return vec![]; }
             let (t0, t1) = (a.start_angle, a.end_angle);
             // CCW parametric tangent is (−sin t, cos t); at the start it points

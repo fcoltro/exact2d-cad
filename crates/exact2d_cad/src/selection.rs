@@ -45,7 +45,7 @@ pub fn select_crossing(doc: &Document, rect: &BoundingBox) -> Vec<EntityId> {
 pub fn select_fence(doc: &Document, fence: &[Point2d]) -> Vec<EntityId> {
     if fence.len() < 2 { return vec![]; }
     let segs: Vec<LineSeg> = fence.windows(2)
-        .map(|w| LineSeg::from_endpoints(w[0].clone(), w[1].clone()))
+        .map(|w| LineSeg::from_endpoints(w[0], w[1]))
         .collect();
 
     doc.editable_entities()
@@ -90,7 +90,7 @@ fn curve_touches_rect(c: &Curve, rect: &BoundingBox) -> bool {
     ];
     for i in 0..4 {
         let side = Curve::Line(LineSeg::from_endpoints(
-            corners[i].clone(), corners[(i + 1) % 4].clone()));
+            corners[i], corners[(i + 1) % 4]));
         if !intersect(&side, c).is_empty() { return true; }
     }
     false

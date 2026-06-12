@@ -1,4 +1,3 @@
-use exact2d_algebra::Rational;
 use crate::curve::{Curve, CurveSegment};
 use crate::primitives::{LineSeg, CircularArc};
 
@@ -24,112 +23,59 @@ pub fn intersect_line_line(l1: &LineSeg, l2: &LineSeg) -> Option<CurveIntersecti
     if det.is_zero() { return None; }
     let x = (b1.clone() * c2.clone() - b2.clone() * c1.clone()) / det.clone();
     let y = (a2.clone() * c1.clone() - a1.clone() * c2.clone()) / det;
+    let (xf, yf) = (x.to_f64(), y.to_f64());
 
     // Find parameters t1, t2 on each segment
-    let t1 = param_on_line(l1, &x, &y);
-    let t2 = param_on_line(l2, &x, &y);
+    let t1 = param_on_line(l1, xf, yf);
+    let t2 = param_on_line(l2, xf, yf);
 
     if (-1e-10..=1.0 + 1e-10).contains(&t1) && (-1e-10..=1.0 + 1e-10).contains(&t2) {
-        Some(CurveIntersection { point: (x.to_f64(), y.to_f64()), t1, t2 })
+        Some(CurveIntersection { point: (xf, yf), t1, t2 })
     } else {
         None
     }
 }
 
-fn param_on_line(l: &LineSeg, x: &Rational, y: &Rational) -> f64 {
-    let dx = l.p1.x.clone() - l.p0.x.clone();
-    let dy = l.p1.y.clone() - l.p0.y.clone();
-    let dx_sq = dx.clone() * dx.clone();
-    let dy_sq = dy.clone() * dy.clone();
-    let len_sq = dx_sq + dy_sq;
-    if len_sq.is_zero() { return 0.0; }
-    let nx = x.clone() - l.p0.x.clone();
-    let ny = y.clone() - l.p0.y.clone();
-    (nx * dx.clone() + ny * dy.clone()).to_f64() / len_sq.to_f64()
+fn param_on_line(l: &LineSeg, x: f64, y: f64) -> f64 {
+    let dx = l.p1.x - l.p0.x;
+    let dy = l.p1.y - l.p0.y;
+    let len_sq = dx * dx + dy * dy;
+    if len_sq == 0.0 { return 0.0; }
+    let nx = x - l.p0.x;
+    let ny = y - l.p0.y;
+    (nx * dx + ny * dy) / len_sq
 }
 
-/// Line–circle intersection (quadratic formula, exact rational discriminant).
+/// Line–circle intersection (quadratic formula in f64).
+/// t1 = line parameter, t2 = angle inside the arc's domain.
 pub fn intersect_line_circle(line: &LineSeg, arc: &CircularArc) -> Vec<CurveIntersection> {
-    let (a, b, c) = line.implicit_coefficients();
-    let cx = arc.center.x.clone();
-    let cy = arc.center.y.clone();
-    let r2 = arc.radius.clone() * arc.radius.clone();
+    let (ax, ay) = line.p0.to_f64();
+    let (bx, by) = line.p1.to_f64();
+    let (cx, cy) = arc.center.to_f64();
+    let r = arc.radius;
 
-    // Substitute line into circle and solve the resulting quadratic.
-    // Case 1: b ≠ 0 → y = -(ax + c)/b, substitute into circle.
-    // Case 2: b = 0 → x = -c/a (vertical line).
+    // |A + t·D − C|² = r²  →  quadratic in t.
+    let (dx, dy) = (bx - ax, by - ay);
+    let (fx, fy) = (ax - cx, ay - cy);
+    let qa = dx * dx + dy * dy;
+    if qa < 1e-20 { return vec![]; }
+    let qb = 2.0 * (fx * dx + fy * dy);
+    let qc = fx * fx + fy * fy - r * r;
+    let disc = qb * qb - 4.0 * qa * qc;
+    if disc < 0.0 { return vec![]; }
+    let sq = disc.sqrt();
+    let mut ts = vec![(-qb - sq) / (2.0 * qa)];
+    if sq > 1e-12 { ts.push((-qb + sq) / (2.0 * qa)); }
+
     let mut results = Vec::new();
-
-    let intersections: Vec<(Rational, Rational)> = if !b.is_zero() {
-        // y = -(a/b)x - c/b
-        // (x-cx)² + (-(a/b)x - c/b - cy)² = r²
-        let ab = a.clone() / b.clone();           // a/b
-        let cb = c.clone() / b.clone();            // c/b
-        // let u = -(a/b)x - c/b - cy = -ab*x - (cb + cy)
-        let k = cb.clone() + cy.clone();            // offset constant
-        // (x-cx)² + (ab*x + k)² = r²
-        // x² - 2cx*x + cx² + ab²*x² + 2ab*k*x + k² - r² = 0
-        // (1 + ab²)*x² + (-2cx + 2ab*k)*x + (cx² + k² - r²) = 0
-        let one = Rational::one();
-        let quad_a = one.clone() + ab.clone() * ab.clone();
-        let quad_b = -Rational::from(2i64) * cx.clone()
-                   + Rational::from(2i64) * ab.clone() * k.clone();
-        let quad_c = cx.clone() * cx.clone() + k.clone() * k.clone() - r2.clone();
-
-        let disc = quad_b.clone() * quad_b.clone()
-                 - Rational::from(4i64) * quad_a.clone() * quad_c.clone();
-        // Classify the discriminant by its EXACT sign, not a float round of it: a
-        // tiny-but-nonzero rational near a tangency must never be mistaken for zero
-        // or flipped negative. `disc.is_zero()` is therefore an exact tangency.
-        if disc.is_negative() { vec![] }
-        else {
-            let sqrt_disc = disc.to_f64().sqrt();
-            let qa_f = quad_a.to_f64();
-            let qb_f = quad_b.to_f64();
-            // Exact tangency emits the single touch point, not two coincident hits.
-            let signs: &[f64] = if disc.is_zero() { &[0.0] } else { &[-1.0, 1.0] };
-            let mut pts = Vec::new();
-            for &sign in signs {
-                let xv = (-qb_f + sign * sqrt_disc) / (2.0 * qa_f);
-                let yv = -ab.to_f64() * xv - cb.to_f64();
-                pts.push((Rational::from_f64_approx(xv), Rational::from_f64_approx(yv)));
-            }
-            pts
-        }
-    } else {
-        // Vertical line: x = -c/a
-        let xv = -c.clone() / a.clone();
-        let dx = xv.clone() - cx.clone();
-        let rem = r2.clone() - dx.clone() * dx;
-        // Exact sign classification (see the quad branch). A tangent vertical line
-        // touches at exactly (xv, cy) — an exact point, not a float pair.
-        if rem.is_negative() { vec![] }
-        else if rem.is_zero() {
-            vec![(xv.clone(), cy.clone())]
-        } else {
-            let sqrt_rem = rem.to_f64().sqrt();
-            let cy_f = cy.to_f64();
-            vec![
-                (xv.clone(), Rational::from_f64_approx(cy_f - sqrt_rem)),
-                (xv.clone(), Rational::from_f64_approx(cy_f + sqrt_rem)),
-            ]
-        }
-    };
-
-    for (xv, yv) in intersections {
-        let t1 = param_on_line(line, &xv, &yv);
-        // Angle on circle
-        let angle = {
-            let dx = xv.to_f64() - arc.center.x.to_f64();
-            let dy = yv.to_f64() - arc.center.y.to_f64();
-            dy.atan2(dx)
-        };
-        // Check domain restrictions
-        let in_segment = (-1e-9..=1.0 + 1e-9).contains(&t1);
-        let in_arc = angle_in_arc(angle, arc.start_angle, arc.end_angle);
-        if in_segment && in_arc {
+    for t in ts {
+        if !(-1e-9..=1.0 + 1e-9).contains(&t) { continue; }
+        let t1 = t.clamp(0.0, 1.0);
+        let (px, py) = (ax + t1 * dx, ay + t1 * dy);
+        let angle = (py - cy).atan2(px - cx);
+        if angle_in_arc(angle, arc.start_angle, arc.end_angle) {
             results.push(CurveIntersection {
-                point: (xv.to_f64(), yv.to_f64()),
+                point: (px, py),
                 t1,
                 t2: angle_on_domain(angle, arc.start_angle, arc.end_angle),
             });
@@ -169,8 +115,8 @@ fn angle_on_domain(angle: f64, start: f64, end: f64) -> f64 {
 pub fn intersect_circle_circle(c1: &CircularArc, c2: &CircularArc) -> Vec<CurveIntersection> {
     let (cx1, cy1) = c1.center.to_f64();
     let (cx2, cy2) = c2.center.to_f64();
-    let r1 = c1.radius.to_f64();
-    let r2 = c2.radius.to_f64();
+    let r1 = c1.radius;
+    let r2 = c2.radius;
 
     let dx = cx2 - cx1;
     let dy = cy2 - cy1;
@@ -488,42 +434,10 @@ fn line_line_numeric(l1: &LineSeg, l2: &LineSeg) -> Option<CurveIntersection> {
         .map(|(point, t1, t2)| CurveIntersection { point, t1, t2 })
 }
 
-/// f64 segment×arc intersection (numeric twin of `intersect_line_circle`).
-/// Same conventions: t1 = line parameter, t2 = angle inside the arc's domain.
+/// f64 segment×arc intersection. Since `intersect_line_circle` is now itself
+/// pure f64 (Phase B), the numeric dispatch simply reuses it.
 fn line_circle_numeric(line: &LineSeg, arc: &CircularArc) -> Vec<CurveIntersection> {
-    let (ax, ay) = line.p0.to_f64();
-    let (bx, by) = line.p1.to_f64();
-    let (cx, cy) = arc.center.to_f64();
-    let r = arc.radius.to_f64();
-
-    // |A + t·D − C|² = r²  →  quadratic in t.
-    let (dx, dy) = (bx - ax, by - ay);
-    let (fx, fy) = (ax - cx, ay - cy);
-    let qa = dx * dx + dy * dy;
-    if qa < 1e-20 { return vec![]; }
-    let qb = 2.0 * (fx * dx + fy * dy);
-    let qc = fx * fx + fy * fy - r * r;
-    let disc = qb * qb - 4.0 * qa * qc;
-    if disc < 0.0 { return vec![]; }
-    let sq = disc.sqrt();
-    let mut ts = vec![(-qb - sq) / (2.0 * qa)];
-    if sq > 1e-12 { ts.push((-qb + sq) / (2.0 * qa)); }
-
-    let mut results = Vec::new();
-    for t in ts {
-        if !(-1e-9..=1.0 + 1e-9).contains(&t) { continue; }
-        let t = t.clamp(0.0, 1.0);
-        let (px, py) = (ax + t * dx, ay + t * dy);
-        let angle = (py - cy).atan2(px - cx);
-        if angle_in_arc(angle, arc.start_angle, arc.end_angle) {
-            results.push(CurveIntersection {
-                point: (px, py),
-                t1: t,
-                t2: angle_on_domain(angle, arc.start_angle, arc.end_angle),
-            });
-        }
-    }
-    results
+    intersect_line_circle(line, arc)
 }
 
 #[cfg(test)]
@@ -532,7 +446,6 @@ mod tests {
     use crate::point::Point2d;
     use crate::primitives::LineSeg;
 
-    fn r(n: i64) -> Rational { Rational::from(n) }
     fn pt(x: i64, y: i64) -> Point2d { Point2d::from_i64(x, y) }
 
     /// When the arc is the FIRST argument, t1 must be the arc's parameter,
@@ -543,7 +456,7 @@ mod tests {
         // 270° arc from angle 0; vertical line cuts it at angle 5π/4 whose raw
         // atan2 is −3π/4.
         let arc = Curve::Arc(CircularArc::new(
-            pt(0, 0), r(5), 0.0, 1.5 * std::f64::consts::PI));
+            pt(0, 0), 5.0, 0.0, 1.5 * std::f64::consts::PI));
         let x = -5.0 / 2f64.sqrt();
         let line = Curve::Line(LineSeg::from_endpoints(
             Point2d::from_f64(x, -6.0), Point2d::from_f64(x, 0.0)));
@@ -608,7 +521,7 @@ mod tests {
             Point2d::from_f64(-10.0, 0.0),
             Point2d::from_f64(10.0, 0.0),
         );
-        let arc = CircularArc::new(pt(0,0), r(5), -std::f64::consts::PI, std::f64::consts::PI);
+        let arc = CircularArc::new(pt(0,0), 5.0, -std::f64::consts::PI, std::f64::consts::PI);
         let hits = intersect_line_circle(&line, &arc);
         assert_eq!(hits.len(), 2, "Expected 2 intersections, got {}", hits.len());
         let mut xs: Vec<f64> = hits.iter().map(|h| h.point.0).collect();
@@ -620,9 +533,9 @@ mod tests {
     #[test]
     fn circle_circle_two_circles() {
         // (x)²+y²=4 and (x-2)²+y²=4: intersect where x=1, y=±√3
-        let c1 = CircularArc::new(pt(0,0), r(2),
+        let c1 = CircularArc::new(pt(0,0), 2.0,
             -std::f64::consts::PI, std::f64::consts::PI);
-        let c2 = CircularArc::new(pt(2,0), r(2),
+        let c2 = CircularArc::new(pt(2,0), 2.0,
             -std::f64::consts::PI, std::f64::consts::PI);
         let hits = intersect_circle_circle(&c1, &c2);
         assert_eq!(hits.len(), 2, "Expected 2 intersections, got {:?}", hits);
@@ -640,7 +553,7 @@ mod tests {
             Point2d::from_f64(-10.0, 4.0),
             Point2d::from_f64(10.0, 4.0),
         );
-        let arc = CircularArc::new(pt(3,4), r(5), -std::f64::consts::PI, std::f64::consts::PI);
+        let arc = CircularArc::new(pt(3,4), 5.0, -std::f64::consts::PI, std::f64::consts::PI);
         let hits = intersect_line_circle(&line, &arc);
         assert_eq!(hits.len(), 2, "Expected 2 intersections, got {}", hits.len());
         let mut pts: Vec<(f64, f64)> = hits.iter().map(|h| h.point).collect();
@@ -658,7 +571,7 @@ mod tests {
         // The discriminant is exactly 0 (rational), so we must report ONE touch
         // point, not two coincident ones — and classify it without a float sign.
         let line = LineSeg::from_endpoints(pt(-8, 5), pt(8, 5));
-        let arc = CircularArc::new(pt(0,0), r(5), -std::f64::consts::PI, std::f64::consts::PI);
+        let arc = CircularArc::new(pt(0,0), 5.0, -std::f64::consts::PI, std::f64::consts::PI);
         let hits = intersect_line_circle(&line, &arc);
         assert_eq!(hits.len(), 1, "exact tangent should be a single touch point");
         assert!((hits[0].point.0).abs() < 1e-9, "x≈0, got {}", hits[0].point.0);
@@ -670,7 +583,7 @@ mod tests {
         // Vertical line x=5 tangent to the r=5 circle at exactly (5,0). The vertical
         // branch returns the touch point as an exact rational, not a float pair.
         let line = LineSeg::from_endpoints(pt(5, -8), pt(5, 8));
-        let arc = CircularArc::new(pt(0,0), r(5), -std::f64::consts::PI, std::f64::consts::PI);
+        let arc = CircularArc::new(pt(0,0), 5.0, -std::f64::consts::PI, std::f64::consts::PI);
         let hits = intersect_line_circle(&line, &arc);
         assert_eq!(hits.len(), 1, "vertical tangent should be a single touch point");
         assert!((hits[0].point.0 - 5.0).abs() < 1e-12, "x≈5, got {}", hits[0].point.0);
@@ -684,8 +597,8 @@ mod tests {
         // implicit-kernel path (general dispatch), with domain-filtered parameters.
         use crate::primitives::EllipticalArc;
         let tau = std::f64::consts::TAU;
-        let e1 = Curve::Ellipse(EllipticalArc::axis_aligned(pt(0, 0), r(2), r(1), 0.0, tau));
-        let e2 = Curve::Ellipse(EllipticalArc::axis_aligned(pt(0, 0), r(1), r(2), 0.0, tau));
+        let e1 = Curve::Ellipse(EllipticalArc::axis_aligned(pt(0, 0), 2.0, 1.0, 0.0, tau));
+        let e2 = Curve::Ellipse(EllipticalArc::axis_aligned(pt(0, 0), 1.0, 2.0, 0.0, tau));
 
         let hits = intersect(&e1, &e2);
         assert_eq!(hits.len(), 4, "two crossing ellipses meet in 4 points, got {}", hits.len());
@@ -705,3 +618,5 @@ mod tests {
         }
     }
 }
+
+

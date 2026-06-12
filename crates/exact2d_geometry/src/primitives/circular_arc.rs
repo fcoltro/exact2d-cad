@@ -7,12 +7,12 @@ use crate::curve::CurveSegment;
 /// The **implicit form** is exact: `(x−cx)² + (y−cy)² − r² = 0`.
 /// The **parametric form** `(cx + r·cos(t), cy + r·sin(t))` involves transcendental
 /// functions, so evaluation is done in f64.  Angular domain: t ∈ [start_angle, end_angle].
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct CircularArc {
-    /// Center (exact rational).
+    /// Center.
     pub center: Point2d,
-    /// Radius (exact rational — must be positive).
-    pub radius: Rational,
+    /// Radius (must be positive).
+    pub radius: f64,
     /// Start angle in radians (CCW from positive x-axis).
     pub start_angle: f64,
     /// End angle in radians.
@@ -23,8 +23,8 @@ impl CircularArc {
     // ── Constructors ──────────────────────────────────────────────────────────
 
     /// Direct construction from center, radius, and angles.
-    pub fn new(center: Point2d, radius: Rational, start_angle: f64, end_angle: f64) -> Self {
-        assert!(radius.is_positive(), "Radius must be positive");
+    pub fn new(center: Point2d, radius: f64, start_angle: f64, end_angle: f64) -> Self {
+        assert!(radius > 0.0, "Radius must be positive");
         CircularArc { center, radius, start_angle, end_angle }
     }
 
@@ -32,37 +32,28 @@ impl CircularArc {
     /// Returns `None` if the three points are collinear.
     pub fn from_three_points(p1: &Point2d, p2: &Point2d, p3: &Point2d) -> Option<Self> {
         // Solve for center: intersection of perpendicular bisectors of P1P2 and P2P3.
-        // Perpendicular bisector of P1P2: passes through midpoint M12 with normal = (P2-P1).
-        // In equation form (exact Rationals):
-        //   (x2-x1)*(x - (x1+x2)/2) + (y2-y1)*(y - (y1+y2)/2) = 0
-        //   => (x2-x1)*x + (y2-y1)*y = ((x2-x1)*(x1+x2) + (y2-y1)*(y1+y2)) / 2
-        let ax = p2.x.clone() - p1.x.clone();
-        let ay = p2.y.clone() - p1.y.clone();
-        let bx = p3.x.clone() - p2.x.clone();
-        let by = p3.y.clone() - p2.y.clone();
+        //   (x2-x1)*x + (y2-y1)*y = ((x2-x1)*(x1+x2) + (y2-y1)*(y1+y2)) / 2
+        let ax = p2.x - p1.x;
+        let ay = p2.y - p1.y;
+        let bx = p3.x - p2.x;
+        let by = p3.y - p2.y;
 
-        // RHS for each bisector
-        let r1 = (ax.clone() * (p1.x.clone() + p2.x.clone())
-                + ay.clone() * (p1.y.clone() + p2.y.clone()))
-               / Rational::from(2i64);
-        let r2 = (bx.clone() * (p2.x.clone() + p3.x.clone())
-                + by.clone() * (p2.y.clone() + p3.y.clone()))
-               / Rational::from(2i64);
+        let r1 = (ax * (p1.x + p2.x) + ay * (p1.y + p2.y)) / 2.0;
+        let r2 = (bx * (p2.x + p3.x) + by * (p2.y + p3.y)) / 2.0;
 
         // Solve 2×2 linear system: [ax ay; bx by] * [cx; cy] = [r1; r2]
-        let det = ax.clone() * by.clone() - ay.clone() * bx.clone();
-        if det.is_zero() { return None; } // collinear
+        let det = ax * by - ay * bx;
+        if det.abs() < 1e-12 { return None; } // collinear
 
-        let cx = (r1.clone() * by.clone() - r2.clone() * ay.clone()) / det.clone();
-        let cy = (ax.clone() * r2.clone() - bx.clone() * r1.clone()) / det;
+        let cx = (r1 * by - r2 * ay) / det;
+        let cy = (ax * r2 - bx * r1) / det;
 
         let center = Point2d { x: cx, y: cy };
-        let r_sq = center.dist_sq(p1);
-        let radius = Rational::from_f64_approx(r_sq.to_f64().sqrt());
+        let radius = center.dist_f64(p1);
 
         // Compute angles at the three points.
         let angle_of = |p: &Point2d| {
-            (p.y.to_f64() - center.y.to_f64()).atan2(p.x.to_f64() - center.x.to_f64())
+            (p.y - center.y).atan2(p.x - center.x)
         };
         let a1 = angle_of(p1);
         let a2 = angle_of(p2);
@@ -111,7 +102,7 @@ impl CircularArc {
 
     /// Sagitta: the height from the chord to the arc midpoint.
     pub fn sagitta(&self) -> f64 {
-        let r = self.radius.to_f64();
+        let r = self.radius;
         r - r * (self.included_angle() / 2.0).cos()
     }
 
@@ -123,9 +114,10 @@ impl CurveSegment for CircularArc {
     fn implicit_form(&self) -> BivariatePoly {
         // (x - cx)² + (y - cy)² - r² = 0
         // = x² - 2cx·x + cx² + y² - 2cy·y + cy² - r² = 0
-        let cx = self.center.x.clone();
-        let cy = self.center.y.clone();
-        let r2 = self.radius.clone() * self.radius.clone();
+        // f64 endpoints/radius lifted to Rational so the symbolic kernel keeps working.
+        let cx = Rational::from_f64_approx(self.center.x);
+        let cy = Rational::from_f64_approx(self.center.y);
+        let r2 = Rational::from_f64_approx(self.radius * self.radius);
 
         let const_term = cx.clone() * cx.clone()
             + cy.clone() * cy.clone()
@@ -145,13 +137,11 @@ impl CurveSegment for CircularArc {
 
     fn evaluate_f64(&self, t: f64) -> (f64, f64) {
         let (cx, cy) = self.center.to_f64();
-        let r = self.radius.to_f64();
+        let r = self.radius;
         (cx + r * t.cos(), cy + r * t.sin())
     }
 
     fn bounding_box(&self) -> BoundingBox {
-        let _r = self.radius.to_f64();
-        let (_cx, _cy) = self.center.to_f64();
         let (sx, sy) = self.start_point();
         let (ex, ey) = self.end_point();
 
@@ -186,12 +176,12 @@ impl CurveSegment for CircularArc {
     }
 
     fn tangent_f64(&self, t: f64) -> (f64, f64) {
-        let r = self.radius.to_f64();
+        let r = self.radius;
         (-r * t.sin(), r * t.cos())
     }
 
     fn arc_length(&self) -> f64 {
-        self.radius.to_f64() * self.included_angle()
+        self.radius * self.included_angle()
     }
 }
 
@@ -205,7 +195,7 @@ mod tests {
     #[test]
     fn implicit_unit_circle_at_origin() {
         let arc = CircularArc::new(
-            pt(0, 0), r(1),
+            pt(0, 0), 1.0,
             0.0, std::f64::consts::PI,
         );
         let f = arc.implicit_form();
@@ -221,7 +211,7 @@ mod tests {
     fn implicit_shifted_circle() {
         // Circle (x-3)²+(y-4)²=25: center (3,4), r=5
         let arc = CircularArc::new(
-            pt(3, 4), r(5),
+            pt(3, 4), 5.0,
             0.0, 2.0 * std::f64::consts::PI,
         );
         let f = arc.implicit_form();
@@ -242,13 +232,13 @@ mod tests {
         let (cx, cy) = arc.center.to_f64();
         assert!((cx - 1.0).abs() < 1e-6, "cx={}", cx);
         assert!((cy - 2.0).abs() < 1e-6, "cy={}", cy);
-        assert!((arc.radius.to_f64() - 3.0).abs() < 1e-4, "r={}", arc.radius.to_f64());
+        assert!((arc.radius - 3.0).abs() < 1e-4, "r={}", arc.radius);
     }
 
     #[test]
     fn arc_length_quarter_circle() {
         let arc = CircularArc::new(
-            Point2d::from_i64(0, 0), r(5),
+            Point2d::from_i64(0, 0), 5.0,
             0.0, std::f64::consts::FRAC_PI_2,
         );
         let expected = 5.0 * std::f64::consts::FRAC_PI_2;
@@ -259,7 +249,7 @@ mod tests {
     fn sagitta_semicircle() {
         // Sagitta of a semicircle = radius
         let arc = CircularArc::new(
-            Point2d::from_i64(0, 0), r(4),
+            Point2d::from_i64(0, 0), 4.0,
             0.0, std::f64::consts::PI,
         );
         assert!((arc.sagitta() - 4.0).abs() < 1e-10);

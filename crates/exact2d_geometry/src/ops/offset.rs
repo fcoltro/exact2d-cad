@@ -1,33 +1,19 @@
-use exact2d_algebra::Rational;
 use crate::curve::{Curve, CurveSegment};
 use crate::point::Point2d;
 use crate::primitives::{LineSeg, CircularArc, CubicBezier};
 
 /// Create an offset curve at distance `dist` (positive = left / CCW side).
 ///
-/// Exact for lines and circles; approximate cubic Bézier for other types.
+/// Closed-form for lines and circles; approximate cubic Bézier for other types.
 pub fn offset_curve(curve: &Curve, dist: f64) -> Curve {
     match curve {
         Curve::Line(l) => {
-            let d = Rational::from_f64_approx(dist);
-            Curve::Line(l.offset_exact(&d))
+            Curve::Line(l.offset_exact(dist))
         }
         Curve::Arc(a) => {
-            let new_r = a.radius.to_f64() + dist;
-            if new_r <= 0.0 {
-                // Degenerate: offset collapses to a point; return degenerate arc
-                Curve::Arc(CircularArc::new(
-                    a.center.clone(),
-                    Rational::from_f64_approx(new_r.abs().max(1e-12)),
-                    a.start_angle, a.end_angle,
-                ))
-            } else {
-                Curve::Arc(CircularArc::new(
-                    a.center.clone(),
-                    Rational::from_f64_approx(new_r),
-                    a.start_angle, a.end_angle,
-                ))
-            }
+            let new_r = a.radius + dist;
+            let r = if new_r <= 0.0 { new_r.abs().max(1e-12) } else { new_r };
+            Curve::Arc(CircularArc::new(a.center, r, a.start_angle, a.end_angle))
         }
         Curve::Bezier(bz) => {
             // Approximate offset: sample points on the offset, fit a cubic Bézier.
@@ -117,9 +103,7 @@ mod tests {
     use super::*;
     use crate::primitives::LineSeg;
     use crate::point::Point2d;
-    use exact2d_algebra::Rational;
 
-    fn r(n: i64) -> Rational { Rational::from(n) }
     fn pt(x: i64, y: i64) -> Point2d { Point2d::from_i64(x, y) }
 
     #[test]
@@ -128,8 +112,8 @@ mod tests {
         let line = Curve::Line(LineSeg::from_endpoints(pt(0,0), pt(4,0)));
         let off = offset_curve(&line, 1.0);
         if let Curve::Line(l) = off {
-            let y0 = l.p0.y.to_f64();
-            let y1 = l.p1.y.to_f64();
+            let y0 = l.p0.y;
+            let y1 = l.p1.y;
             assert!((y0 - 1.0).abs() < 1e-5, "y0={}", y0);
             assert!((y1 - 1.0).abs() < 1e-5, "y1={}", y1);
         } else {
@@ -139,11 +123,11 @@ mod tests {
 
     #[test]
     fn offset_circle_increases_radius() {
-        let arc = Curve::Arc(CircularArc::new(pt(0,0), r(3),
+        let arc = Curve::Arc(CircularArc::new(pt(0,0), 3.0,
             0.0, 2.0 * std::f64::consts::PI));
         let off = offset_curve(&arc, 2.0);
         if let Curve::Arc(a) = off {
-            assert!((a.radius.to_f64() - 5.0).abs() < 1e-9);
+            assert!((a.radius - 5.0).abs() < 1e-9);
         } else {
             panic!("Expected Arc");
         }
@@ -151,11 +135,11 @@ mod tests {
 
     #[test]
     fn offset_circle_decreases_radius() {
-        let arc = Curve::Arc(CircularArc::new(pt(0,0), r(5),
+        let arc = Curve::Arc(CircularArc::new(pt(0,0), 5.0,
             0.0, 2.0 * std::f64::consts::PI));
         let off = offset_curve(&arc, -2.0);
         if let Curve::Arc(a) = off {
-            assert!((a.radius.to_f64() - 3.0).abs() < 1e-9);
+            assert!((a.radius - 3.0).abs() < 1e-9);
         } else {
             panic!("Expected Arc");
         }

@@ -1,5 +1,7 @@
-use exact2d_geometry::{Curve, CurveSegment, intersect, split_curve};
+use exact2d_geometry::{Curve, CurveSegment, Point2d, LineSeg, CubicBezier, PolyCurve,
+                       intersect_numeric, split_curve};
 use crate::region::Region;
+use crate::weld::{weld_region, WELD_TOL};
 
 // ── Public boolean operations ─────────────────────────────────────────────────
 
@@ -39,6 +41,12 @@ fn boolean_op<F>(a: &Region, b: &Region, keep: F) -> Region
 where
     F: Fn(bool, bool) -> bool,
 {
+    // Weld each region's boundary seams first: trimmed/float-derived joints only
+    // coincide to ~1e-9, which would otherwise leave the loop-chainer with open
+    // loops. Welding snaps them to shared vertices (and requantises coordinates).
+    let a = &weld_region(a, WELD_TOL);
+    let b = &weld_region(b, WELD_TOL);
+
     let a_boundary: Vec<&Curve> = boundary_curves(a);
     let b_boundary: Vec<&Curve> = boundary_curves(b);
 
@@ -87,7 +95,9 @@ fn split_at_intersections(curve: &Curve, others: &[&Curve]) -> Vec<Curve> {
     // Collect intersection parameters, normalized to [0, 1]
     let mut params: Vec<f64> = vec![0.0, 1.0];
     for other in others {
-        for hit in intersect(curve, other) {
+        // Numeric intersection: booleans run on float-derived boundaries whose exact
+        // resultants are both slow (BigInt) and not-actually-exact after welding.
+        for hit in intersect_numeric(curve, other) {
             let t_norm = (hit.t1 - domain_lo) / domain_len;
             if t_norm > 1e-8 && t_norm < 1.0 - 1e-8 {
                 params.push(t_norm);
@@ -115,11 +125,30 @@ fn extract_piece(curve: &Curve, t0: f64, t1: f64) -> Curve {
         curve.clone()
     };
     if t0 < 1e-9 {
-        return left;
+        return requantize(left);
     }
     // Scale t0 into the coordinate system of `left` (whose domain is [0, t1])
     let t0_scaled = (t0 / t1).min(1.0);
-    split_curve(&left, t0_scaled).1
+    requantize(split_curve(&left, t0_scaled).1)
+}
+
+/// Round a piece's defining points back to ~12 significant digits.
+///
+/// The split parameters came from f64 intersections, so the exact de Casteljau /
+/// endpoint splits on float-derived rationals multiply denominators on every cut.
+/// Chained booleans would otherwise accumulate swollen BigInt coordinates that
+/// make every downstream rational op allocate and GCD huge integers. Arcs/ellipses
+/// keep their exact centre/radius (their split only changes f64 angles).
+fn requantize(c: Curve) -> Curve {
+    let q = |p: &Point2d| { let (x, y) = p.to_f64(); Point2d::from_f64(x, y) };
+    match c {
+        Curve::Line(l) => Curve::Line(LineSeg::from_endpoints(q(&l.p0), q(&l.p1))),
+        Curve::Bezier(b) =>
+            Curve::Bezier(CubicBezier::new(q(&b.p0), q(&b.p1), q(&b.p2), q(&b.p3))),
+        Curve::Poly(pc) =>
+            Curve::Poly(Box::new(PolyCurve::new(pc.segments.into_iter().map(requantize).collect()))),
+        other => other,
+    }
 }
 
 // ── Loop chaining ─────────────────────────────────────────────────────────────
@@ -200,7 +229,7 @@ fn midpoint_f64(curve: &Curve) -> (f64, f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use exact2d_geometry::{LineSeg, Point2d};
+    use exact2d_geometry::{LineSeg, Point2d, CubicBezier};
 
     fn square(x0: i64, y0: i64, x1: i64, y1: i64) -> Region {
         Region::new(vec![
@@ -262,6 +291,51 @@ mod tests {
             );
         }
         assert!(!u.outer.is_empty(), "Union should have segments");
+    }
+
+    #[test]
+    fn boolean_welds_open_input_boundary() {
+        // Square A with a ~1e-9 gap at the bottom-left corner; B overlaps its right
+        // strip. Welding must close A so the difference still selects segments.
+        let g = 1e-9;
+        let a = Region::new(vec![
+            Curve::Line(LineSeg::from_endpoints(Point2d::from_f64(0.0, 0.0), Point2d::from_f64(4.0, 0.0))),
+            Curve::Line(LineSeg::from_endpoints(Point2d::from_f64(4.0, 0.0), Point2d::from_f64(4.0, 4.0))),
+            Curve::Line(LineSeg::from_endpoints(Point2d::from_f64(4.0, 4.0), Point2d::from_f64(0.0, 4.0))),
+            Curve::Line(LineSeg::from_endpoints(Point2d::from_f64(g, 4.0), Point2d::from_f64(g, g))),
+        ]);
+        let b = square(3, 0, 5, 4);
+        let diff = difference(&a, &b);
+        assert!(!diff.outer.is_empty(), "welded difference should not be empty");
+        // Predicate is checked against a CLEAN reference square — the open input `a`
+        // has unreliable winding (that is exactly what welding repairs internally).
+        let a_ref = square(0, 0, 4, 4);
+        for seg in &diff.outer {
+            let (mx, my) = midpoint_f64(seg);
+            assert!(a_ref.contains_point(mx, my) && !b.contains_point(mx, my),
+                    "segment midpoint ({:.3},{:.3}) violates A−B", mx, my);
+        }
+    }
+
+    #[test]
+    fn boolean_over_bezier_boundary_is_fast() {
+        // Regression/perf canary: a region whose boundary includes a cubic Bézier
+        // used to route boolean splitting through the exact symbolic kernel
+        // (~seconds per spline pair). It now uses intersect_numeric.
+        let a = Region::new(vec![
+            Curve::Bezier(CubicBezier::new(
+                Point2d::from_f64(0.0, 0.0), Point2d::from_f64(1.0, 3.0),
+                Point2d::from_f64(3.0, -3.0), Point2d::from_f64(4.0, 0.0))),
+            Curve::Line(LineSeg::from_endpoints(Point2d::from_f64(4.0, 0.0), Point2d::from_f64(4.0, 4.0))),
+            Curve::Line(LineSeg::from_endpoints(Point2d::from_f64(4.0, 4.0), Point2d::from_f64(0.0, 4.0))),
+            Curve::Line(LineSeg::from_endpoints(Point2d::from_f64(0.0, 4.0), Point2d::from_f64(0.0, 0.0))),
+        ]);
+        let b = square(1, 1, 3, 5);
+        let t = std::time::Instant::now();
+        let _ = difference(&a, &b);
+        let _ = union(&a, &b);
+        let _ = intersection(&a, &b);
+        assert!(t.elapsed().as_millis() < 500, "boolean over Bézier too slow: {:?}", t.elapsed());
     }
 
     #[test]

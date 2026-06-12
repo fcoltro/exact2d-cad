@@ -5,7 +5,6 @@
 //! CAD uses y-up. We flip the y-axis using the drawing height `H` recorded in the
 //! viewBox, so a world point (x, y) maps to SVG (x, H − y) and back.
 
-use exact2d_algebra::Rational;
 use exact2d_geometry::{
     Curve, CurveSegment, Point2d, LineSeg, CircularArc, EllipticalArc, CubicBezier, PolyCurve,
 };
@@ -31,7 +30,7 @@ pub fn export_svg(doc: &Document) -> String {
         }
         None => (100.0, 100.0, 100.0),
     };
-    let x_shift = doc.extents().map(|bb| bb.min.x.to_f64() - 0.05 * ((bb.max.x.to_f64()-bb.min.x.to_f64()).max(bb.max.y.to_f64()-bb.min.y.to_f64())).max(1.0)).unwrap_or(0.0);
+    let x_shift = doc.extents().map(|bb| bb.min.x - 0.05 * ((bb.max.x-bb.min.x).max(bb.max.y-bb.min.y)).max(1.0)).unwrap_or(0.0);
 
     let fy = |y: f64| h_flip - y;
     let fx = |x: f64| x - x_shift;
@@ -71,7 +70,7 @@ fn entity_to_svg(kind: &EntityKind, fx: &impl Fn(f64) -> f64, fy: &impl Fn(f64) 
         }
         EntityKind::Curve(Curve::Arc(a)) => {
             let (cx, cy) = a.center.to_f64();
-            let r = a.radius.to_f64();
+            let r = a.radius;
             let span = (a.end_angle - a.start_angle).abs();
             if (span - TAU).abs() < 1e-9 {
                 Some(format!("  <circle cx=\"{:.6}\" cy=\"{:.6}\" r=\"{:.6}\" {}/>",
@@ -85,9 +84,9 @@ fn entity_to_svg(kind: &EntityKind, fx: &impl Fn(f64) -> f64, fy: &impl Fn(f64) 
             let (cx, cy) = e.center.to_f64();
             if e.rotation.abs() < 1e-9 {
                 Some(format!("  <ellipse cx=\"{:.6}\" cy=\"{:.6}\" rx=\"{:.6}\" ry=\"{:.6}\" {}/>",
-                    fx(cx), fy(cy), e.semi_major.to_f64(), e.semi_minor.to_f64(), style))
+                    fx(cx), fy(cy), e.semi_major, e.semi_minor, style))
             } else {
-                Some(format!("  <path d=\"{}\" {}/>", sampled_path(&Curve::Ellipse(e.clone()), fx, fy), style))
+                Some(format!("  <path d=\"{}\" {}/>", sampled_path(&Curve::Ellipse(*e), fx, fy), style))
             }
         }
         EntityKind::Curve(Curve::Bezier(b)) => {
@@ -117,7 +116,7 @@ fn entity_to_svg(kind: &EntityKind, fx: &impl Fn(f64) -> f64, fy: &impl Fn(f64) 
 fn arc_path(a: &CircularArc, fx: &impl Fn(f64) -> f64, fy: &impl Fn(f64) -> f64) -> String {
     let (sx, sy) = a.start_point();
     let (ex, ey) = a.end_point();
-    let r = a.radius.to_f64();
+    let r = a.radius;
     let large = if a.included_angle() > std::f64::consts::PI { 1 } else { 0 };
     // CCW in world = CW in flipped SVG → sweep flag 0.
     let sweep = 0;
@@ -160,7 +159,7 @@ fn polycurve_path(pc: &PolyCurve, fx: &impl Fn(f64) -> f64, fy: &impl Fn(f64) ->
                 let (sx, sy) = a.start_point();
                 let (ex, ey) = a.end_point();
                 if first { d.push_str(&format!("M {:.6} {:.6} ", fx(sx), fy(sy))); first = false; }
-                let r = a.radius.to_f64();
+                let r = a.radius;
                 let large = if a.included_angle() > std::f64::consts::PI { 1 } else { 0 };
                 d.push_str(&format!("A {:.6} {:.6} 0 {} 0 {:.6} {:.6} ", r, r, large, fx(ex), fy(ey)));
             }
@@ -204,7 +203,7 @@ pub fn import_svg(svg: &str) -> Document {
                 let r = num(&el, "r");
                 if r > 0.5 + 1e-9 || el.attrs.iter().any(|(k, _)| k == "r") && r > 0.0 {
                     doc.add(EntityKind::Curve(Curve::Arc(CircularArc::new(
-                        Point2d::from_f64(cx, cy), Rational::from_f64_approx(r), 0.0, TAU))));
+                        Point2d::from_f64(cx, cy), r, 0.0, TAU))));
                 }
             }
             "ellipse" => {
@@ -212,7 +211,7 @@ pub fn import_svg(svg: &str) -> Document {
                 let rx = num(&el, "rx"); let ry = num(&el, "ry");
                 doc.add(EntityKind::Curve(Curve::Ellipse(EllipticalArc::new(
                     Point2d::from_f64(cx, cy),
-                    Rational::from_f64_approx(rx), Rational::from_f64_approx(ry),
+                    rx, ry,
                     0.0, 0.0, TAU))));
             }
             "path" => {
@@ -398,7 +397,7 @@ fn svg_arc_to_circular(p0: (f64, f64), p1: (f64, f64), r: f64, large: bool, swee
     let cy = my + side * h * uy;
     let start = (y0 - cy).atan2(x0 - cx);
     let end = (y1 - cy).atan2(x1 - cx);
-    Some(CircularArc::new(Point2d::from_f64(cx, cy), Rational::from_f64_approx(r), start, end))
+    Some(CircularArc::new(Point2d::from_f64(cx, cy), r, start, end))
 }
 
 #[cfg(test)]
@@ -438,15 +437,15 @@ mod tests {
     #[test]
     fn roundtrip_circle() {
         let mut doc = Document::new();
-        doc.add(EntityKind::Curve(Curve::Arc(CircularArc::new(pt(5,5), Rational::from(3i64), 0.0, TAU))));
+        doc.add(EntityKind::Curve(Curve::Arc(CircularArc::new(pt(5,5), 3.0, 0.0, TAU))));
         let svg = export_svg(&doc);
         assert!(svg.contains("<circle"));
         let doc2 = import_svg(&svg);
         let es: Vec<_> = doc2.iter().collect();
         if let Some(Curve::Arc(a)) = es[0].as_curve() {
-            assert!((a.center.x.to_f64() - 5.0).abs() < 1e-6);
-            assert!((a.center.y.to_f64() - 5.0).abs() < 1e-6);
-            assert!((a.radius.to_f64() - 3.0).abs() < 1e-6);
+            assert!((a.center.x - 5.0).abs() < 1e-6);
+            assert!((a.center.y - 5.0).abs() < 1e-6);
+            assert!((a.radius - 3.0).abs() < 1e-6);
         } else { panic!() }
     }
 

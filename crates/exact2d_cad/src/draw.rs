@@ -1,7 +1,6 @@
 //! Drawing commands (spec §4.3): LINE, CIRCLE, ARC, ELLIPSE, RECTANGLE, POLYGON,
 //! POLYLINE, POINT. Each adds one or more entities to the document and returns ids.
 
-use exact2d_algebra::Rational;
 use exact2d_geometry::{
     Curve, Point2d, LineSeg, CircularArc, EllipticalArc, CubicBezier, PolyCurve,
 };
@@ -13,7 +12,7 @@ pub fn line(doc: &mut Document, a: Point2d, b: Point2d) -> EntityId {
 }
 
 /// CIRCLE: center + radius (full circle).
-pub fn circle(doc: &mut Document, center: Point2d, radius: Rational) -> EntityId {
+pub fn circle(doc: &mut Document, center: Point2d, radius: f64) -> EntityId {
     let arc = CircularArc::new(center, radius, 0.0, 2.0 * std::f64::consts::PI);
     doc.add(EntityKind::Curve(Curve::Arc(arc)))
 }
@@ -26,25 +25,25 @@ pub fn circle_3p(doc: &mut Document, p1: &Point2d, p2: &Point2d, p3: &Point2d) -
 }
 
 /// ARC: center, radius, start & end angle (radians, CCW).
-pub fn arc(doc: &mut Document, center: Point2d, radius: Rational, start: f64, end: f64) -> EntityId {
+pub fn arc(doc: &mut Document, center: Point2d, radius: f64, start: f64, end: f64) -> EntityId {
     doc.add(EntityKind::Curve(Curve::Arc(CircularArc::new(center, radius, start, end))))
 }
 
 /// ELLIPSE: center, semi-axes, rotation, full sweep.
-pub fn ellipse(doc: &mut Document, center: Point2d, major: Rational, minor: Rational, rotation: f64) -> EntityId {
+pub fn ellipse(doc: &mut Document, center: Point2d, major: f64, minor: f64, rotation: f64) -> EntityId {
     let e = EllipticalArc::new(center, major, minor, rotation, 0.0, 2.0 * std::f64::consts::PI);
     doc.add(EntityKind::Curve(Curve::Ellipse(e)))
 }
 
 /// RECTANGLE: from two opposite corners, as 4 line segments (CCW from min corner).
 pub fn rectangle(doc: &mut Document, c0: &Point2d, c1: &Point2d) -> Vec<EntityId> {
-    let (x0, x1) = order(c0.x.clone(), c1.x.clone());
-    let (y0, y1) = order(c0.y.clone(), c1.y.clone());
-    let p = |x: &Rational, y: &Rational| Point2d::new(x.clone(), y.clone());
+    let (x0, x1) = order(c0.x, c1.x);
+    let (y0, y1) = order(c0.y, c1.y);
+    let p = |x: f64, y: f64| Point2d::new(x, y);
     let corners = [
-        p(&x0, &y0), p(&x1, &y0), p(&x1, &y1), p(&x0, &y1),
+        p(x0, y0), p(x1, y0), p(x1, y1), p(x0, y1),
     ];
-    (0..4).map(|i| line(doc, corners[i].clone(), corners[(i + 1) % 4].clone())).collect()
+    (0..4).map(|i| line(doc, corners[i], corners[(i + 1) % 4])).collect()
 }
 
 /// POLYGON: regular n-gon. `inscribed` = vertices on the circle of `radius`;
@@ -57,7 +56,7 @@ pub fn polygon(doc: &mut Document, center: &Point2d, n: u32, radius: f64, inscri
         let a = start_angle + 2.0 * std::f64::consts::PI * i as f64 / n as f64;
         Point2d::from_f64(cx + r * a.cos(), cy + r * a.sin())
     }).collect();
-    (0..n as usize).map(|i| line(doc, verts[i].clone(), verts[(i + 1) % n as usize].clone())).collect()
+    (0..n as usize).map(|i| line(doc, verts[i], verts[(i + 1) % n as usize])).collect()
 }
 
 /// SPLINE (fit by cubic Bézier): a single cubic from 4 control vertices.
@@ -86,7 +85,7 @@ pub fn divide(doc: &mut Document, curve: &Curve, n: u32) -> Vec<EntityId> {
     }).collect()
 }
 
-fn order(a: Rational, b: Rational) -> (Rational, Rational) {
+fn order(a: f64, b: f64) -> (f64, f64) {
     if a <= b { (a, b) } else { (b, a) }
 }
 
@@ -95,13 +94,12 @@ mod tests {
     use super::*;
 
     fn pt(x: i64, y: i64) -> Point2d { Point2d::from_i64(x, y) }
-    fn r(n: i64) -> Rational { Rational::from(n) }
 
     #[test]
     fn draw_line_and_circle() {
         let mut doc = Document::new();
         line(&mut doc, pt(0,0), pt(5,5));
-        circle(&mut doc, pt(2,2), r(3));
+        circle(&mut doc, pt(2,2), 3.0);
         assert_eq!(doc.len(), 2);
     }
 
@@ -129,7 +127,7 @@ mod tests {
         // Every endpoint must lie at radius 5 from the center
         for e in doc.iter() {
             if let Some(Curve::Line(l)) = e.as_curve() {
-                let d = (l.p0.x.to_f64().powi(2) + l.p0.y.to_f64().powi(2)).sqrt();
+                let d = (l.p0.x.powi(2) + l.p0.y.powi(2)).sqrt();
                 assert!((d - 5.0).abs() < 1e-6, "vertex not on circle: d={}", d);
             }
         }
@@ -144,7 +142,7 @@ mod tests {
         // First division point at (2,0)
         let first = doc.get(pts[0]).unwrap();
         if let EntityKind::Point(p) = &first.kind {
-            assert!((p.x.to_f64() - 2.0).abs() < 1e-6);
+            assert!((p.x - 2.0).abs() < 1e-6);
         } else { panic!() }
     }
 
@@ -154,8 +152,8 @@ mod tests {
         let id = circle_3p(&mut doc, &Point2d::from_f64(1.0,0.0),
             &Point2d::from_f64(0.0,1.0), &Point2d::from_f64(-1.0,0.0)).unwrap();
         if let Some(Curve::Arc(a)) = doc.get(id).unwrap().as_curve() {
-            assert!(a.center.x.to_f64().abs() < 1e-9 && a.center.y.to_f64().abs() < 1e-9);
-            assert!((a.radius.to_f64() - 1.0).abs() < 1e-6);
+            assert!(a.center.x.abs() < 1e-9 && a.center.y.abs() < 1e-9);
+            assert!((a.radius - 1.0).abs() < 1e-6);
         } else { panic!() }
     }
 }

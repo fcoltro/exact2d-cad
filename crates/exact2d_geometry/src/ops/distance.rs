@@ -50,11 +50,28 @@ pub fn project_point_onto_curve(curve: &Curve, px: f64, py: f64) -> ProjectionRe
             let d = ((px - qx).powi(2) + (py - qy).powi(2)).sqrt();
             return ProjectionResult { point: (qx, qy), t: angle_clamped, distance: d };
         }
+        Bezier(b) => {
+            // Convert the control points to f64 ONCE and run the search in pure
+            // f64. `Curve::evaluate_f64` converts all four rational control
+            // points on every call — ~80 calls per projection — which crawls
+            // once the rationals carry float-derived (large) denominators.
+            let (x0, y0) = b.p0.to_f64();
+            let (x1, y1) = b.p1.to_f64();
+            let (x2, y2) = b.p2.to_f64();
+            let (x3, y3) = b.p3.to_f64();
+            let ev = move |t: f64| {
+                let u = 1.0 - t;
+                (u*u*u*x0 + 3.0*u*u*t*x1 + 3.0*u*t*t*x2 + t*t*t*x3,
+                 u*u*u*y0 + 3.0*u*u*t*y1 + 3.0*u*t*t*y2 + t*t*t*y3)
+            };
+            return golden_section_projection_fn(&ev, (0.0, 1.0), px, py, 32);
+        }
         _ => {}
     }
 
     // General: sample + golden-section refinement
-    golden_section_projection(curve, px, py, 32)
+    let ev = |t: f64| curve.evaluate_f64(t);
+    golden_section_projection_fn(&ev, curve.domain(), px, py, 32)
 }
 
 fn clamp_angle(angle: f64, start: f64, end: f64) -> f64 {
@@ -75,17 +92,25 @@ fn clamp_angle(angle: f64, start: f64, end: f64) -> f64 {
     }
 }
 
-fn golden_section_projection(curve: &Curve, px: f64, py: f64, samples: usize) -> ProjectionResult {
-    let (t0, t1) = curve.domain();
+fn golden_section_projection_fn(
+    ev: &dyn Fn(f64) -> (f64, f64),
+    domain: (f64, f64),
+    px: f64, py: f64,
+    samples: usize,
+) -> ProjectionResult {
+    let (t0, t1) = domain;
     let dt = (t1 - t0) / samples as f64;
+    let dist_sq = |t: f64| {
+        let (qx, qy) = ev(t);
+        (qx - px).powi(2) + (qy - py).powi(2)
+    };
 
     // Find rough minimum
     let mut best_t = t0;
     let mut best_d = f64::INFINITY;
     for i in 0..=samples {
         let t = t0 + i as f64 * dt;
-        let (qx, qy) = curve.evaluate_f64(t);
-        let d = (qx - px).powi(2) + (qy - py).powi(2);
+        let d = dist_sq(t);
         if d < best_d { best_d = d; best_t = t; }
     }
 
@@ -96,20 +121,13 @@ fn golden_section_projection(curve: &Curve, px: f64, py: f64, samples: usize) ->
     for _ in 0..50 {
         let c = b - phi * (b - a);
         let d = a + phi * (b - a);
-        let fc = dist_sq(curve, px, py, c);
-        let fd = dist_sq(curve, px, py, d);
-        if fc < fd { b = d; } else { a = c; }
+        if dist_sq(c) < dist_sq(d) { b = d; } else { a = c; }
         if (b - a).abs() < 1e-12 { break; }
     }
     let t_opt = (a + b) / 2.0;
-    let (qx, qy) = curve.evaluate_f64(t_opt);
+    let (qx, qy) = ev(t_opt);
     let d = ((px - qx).powi(2) + (py - qy).powi(2)).sqrt();
     ProjectionResult { point: (qx, qy), t: t_opt, distance: d }
-}
-
-fn dist_sq(curve: &Curve, px: f64, py: f64, t: f64) -> f64 {
-    let (qx, qy) = curve.evaluate_f64(t);
-    (qx - px).powi(2) + (qy - py).powi(2)
 }
 
 /// Minimum distance between two curves.

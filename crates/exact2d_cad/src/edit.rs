@@ -627,9 +627,32 @@ fn normalized_pick_param(curve: &Curve, px: f64, py: f64) -> f64 {
 /// Extract the sub-curve between normalized params [a, b].
 fn extract_piece(curve: &Curve, a: f64, b: f64) -> Curve {
     let left = if b < 1.0 - 1e-9 { split_curve(curve, b).0 } else { curve.clone() };
-    if a < 1e-9 { return left; }
-    let a_scaled = (a / b).min(1.0);
-    split_curve(&left, a_scaled).1
+    let piece = if a < 1e-9 { left } else {
+        let a_scaled = (a / b).min(1.0);
+        split_curve(&left, a_scaled).1
+    };
+    requantize(piece)
+}
+
+/// Round a piece's defining points back to ~12 significant digits.
+///
+/// The split parameter came from an f64 intersection, so the piece carries no
+/// real precision beyond f64 — but the *exact* de Casteljau / endpoint split on
+/// float-derived rationals multiplies denominators on every cut. After a long
+/// trim session those swollen coordinates made every per-frame rational op
+/// (snap scans, bboxes, projections) allocate and GCD huge BigInts, visibly
+/// degrading the UI. Arcs/ellipses keep their exact center/radius (their split
+/// only changes f64 angles).
+fn requantize(c: Curve) -> Curve {
+    let q = |p: &Point2d| { let (x, y) = p.to_f64(); Point2d::from_f64(x, y) };
+    match c {
+        Curve::Line(l) => Curve::Line(LineSeg::from_endpoints(q(&l.p0), q(&l.p1))),
+        Curve::Bezier(b) =>
+            Curve::Bezier(exact2d_geometry::CubicBezier::new(q(&b.p0), q(&b.p1), q(&b.p2), q(&b.p3))),
+        Curve::Poly(pc) => Curve::Poly(Box::new(exact2d_geometry::PolyCurve::new(
+            pc.segments.into_iter().map(requantize).collect()))),
+        other => other,
+    }
 }
 
 #[cfg(test)]

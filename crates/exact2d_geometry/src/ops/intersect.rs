@@ -461,13 +461,16 @@ pub fn intersect(c1: &Curve, c2: &Curve) -> Vec<CurveIntersection> {
 /// the numeric path is microseconds and accurate to sub-pixel for snapping.
 pub fn intersect_numeric(c1: &Curve, c2: &Curve) -> Vec<CurveIntersection> {
     match (c1, c2) {
+        // Pure-f64 line/line and line/arc: the exact rational Cramer/quadratic
+        // paths allocate and GCD BigInts, which is too slow for the per-frame
+        // snap scan once coordinates carry float-derived denominators.
         (Curve::Line(l1), Curve::Line(l2)) =>
-            intersect_line_line(l1, l2).into_iter().collect(),
+            line_line_numeric(l1, l2).into_iter().collect(),
         (Curve::Line(l), Curve::Arc(a)) =>
-            intersect_line_circle(l, a),
+            line_circle_numeric(l, a),
         // t1 must be the parameter on c1: swap the line/arc params back.
         (Curve::Arc(a), Curve::Line(l)) =>
-            intersect_line_circle(l, a).into_iter()
+            line_circle_numeric(l, a).into_iter()
                 .map(|h| CurveIntersection { point: h.point, t1: h.t2, t2: h.t1 })
                 .collect(),
         (Curve::Arc(a1), Curve::Arc(a2)) =>
@@ -475,6 +478,52 @@ pub fn intersect_numeric(c1: &Curve, c2: &Curve) -> Vec<CurveIntersection> {
         _ =>
             intersect_general_numeric(c1, c2),
     }
+}
+
+/// f64 segment×segment intersection (numeric twin of `intersect_line_line`).
+fn line_line_numeric(l1: &LineSeg, l2: &LineSeg) -> Option<CurveIntersection> {
+    let (pa, pb) = (l1.p0.to_f64(), l1.p1.to_f64());
+    let (qa, qb) = (l2.p0.to_f64(), l2.p1.to_f64());
+    intersect_segments_f64(pa, pb, qa, qb)
+        .map(|(point, t1, t2)| CurveIntersection { point, t1, t2 })
+}
+
+/// f64 segment×arc intersection (numeric twin of `intersect_line_circle`).
+/// Same conventions: t1 = line parameter, t2 = angle inside the arc's domain.
+fn line_circle_numeric(line: &LineSeg, arc: &CircularArc) -> Vec<CurveIntersection> {
+    let (ax, ay) = line.p0.to_f64();
+    let (bx, by) = line.p1.to_f64();
+    let (cx, cy) = arc.center.to_f64();
+    let r = arc.radius.to_f64();
+
+    // |A + t·D − C|² = r²  →  quadratic in t.
+    let (dx, dy) = (bx - ax, by - ay);
+    let (fx, fy) = (ax - cx, ay - cy);
+    let qa = dx * dx + dy * dy;
+    if qa < 1e-20 { return vec![]; }
+    let qb = 2.0 * (fx * dx + fy * dy);
+    let qc = fx * fx + fy * fy - r * r;
+    let disc = qb * qb - 4.0 * qa * qc;
+    if disc < 0.0 { return vec![]; }
+    let sq = disc.sqrt();
+    let mut ts = vec![(-qb - sq) / (2.0 * qa)];
+    if sq > 1e-12 { ts.push((-qb + sq) / (2.0 * qa)); }
+
+    let mut results = Vec::new();
+    for t in ts {
+        if !(-1e-9..=1.0 + 1e-9).contains(&t) { continue; }
+        let t = t.clamp(0.0, 1.0);
+        let (px, py) = (ax + t * dx, ay + t * dy);
+        let angle = (py - cy).atan2(px - cx);
+        if angle_in_arc(angle, arc.start_angle, arc.end_angle) {
+            results.push(CurveIntersection {
+                point: (px, py),
+                t1: t,
+                t2: angle_on_domain(angle, arc.start_angle, arc.end_angle),
+            });
+        }
+    }
+    results
 }
 
 #[cfg(test)]

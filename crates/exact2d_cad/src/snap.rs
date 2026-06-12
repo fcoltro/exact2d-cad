@@ -1,9 +1,11 @@
-//! Object snapping (spec §4.2). All snaps are computed via exact algebraic
-//! methods on the underlying curves, then surfaced as f64 positions for the UI.
+//! Object snapping (spec §4.2). Snaps are computed in f64 — they run on every
+//! mouse move and only need pixel accuracy; the snapped position is surfaced as
+//! f64 to the UI either way. (Exact rational math here proved far too slow once
+//! trimmed entities carried float-derived coordinates.)
 
 use exact2d_algebra::Rational;
 use exact2d_geometry::{
-    Curve, CurveSegment, Point2d, BoundingBox,
+    Curve, CurveSegment, Point2d,
     intersect_numeric, project_point_onto_curve,
 };
 use exact2d_document::{Document, EntityKind, EntityId};
@@ -90,16 +92,15 @@ pub fn find_snaps(
         match &e.kind {
             EntityKind::Curve(c) => {
                 // Cheap spatial pre-filter: every curve snap position (endpoint,
-                // midpoint, nearest/perpendicular/tangent foot) lies on the curve,
-                // i.e. inside its bbox — so far-away entities can be skipped
-                // before any projection math. Without this, the golden-section
-                // projections ran on EVERY entity per mouse move and drawing got
-                // slower as the document grew. The arc center is checked
-                // separately (a shallow arc's center lies outside its bbox).
+                // midpoint, nearest/perpendicular/tangent foot) lies inside the
+                // (conservative) bbox — so far-away entities are skipped before
+                // any projection math. Uses the pure-f64 bbox: the exact
+                // `bounding_box()` clones and compares rationals, which gets
+                // expensive once trimmed pieces carry float-derived coordinates.
+                // The arc center is checked separately (a shallow arc's center
+                // lies outside its bbox).
                 let pad = tol * 4.0;
-                let bb = c.bounding_box();
-                let (minx, miny) = bb.min.to_f64();
-                let (maxx, maxy) = bb.max.to_f64();
+                let (minx, miny, maxx, maxy) = fast_bbox_f64(c);
                 let near_bbox = cursor.0 >= minx - pad && cursor.0 <= maxx + pad
                     && cursor.1 >= miny - pad && cursor.1 <= maxy + pad;
                 let near_center = on(SnapKind::Center)
@@ -156,18 +157,15 @@ pub fn find_snaps(
     // Intersection snaps: pairwise over curve entities whose bboxes are near the cursor.
     if on(SnapKind::Intersection) {
         let pad = tol * 5.0;
-        let cursor_box = BoundingBox::from_corners(
-            cursor.0 - pad, cursor.1 - pad,
-            cursor.0 + pad, cursor.1 + pad,
-        );
         let curves: Vec<_> = entities.iter()
             .filter_map(|e| {
                 e.as_curve().and_then(|c| {
-                    if c.bounding_box().intersects(&cursor_box) {
-                        Some((e.id, c))
-                    } else {
-                        None
-                    }
+                    // f64 bbox filter — the exact rational bbox allocated and
+                    // compared BigInts per entity per mouse move.
+                    let (minx, miny, maxx, maxy) = fast_bbox_f64(c);
+                    let near = cursor.0 >= minx - pad && cursor.0 <= maxx + pad
+                        && cursor.1 >= miny - pad && cursor.1 <= maxy + pad;
+                    if near { Some((e.id, c)) } else { None }
                 })
             })
             .collect();
@@ -225,9 +223,51 @@ fn endpoints(c: &Curve) -> Vec<(f64, f64)> {
     }
 }
 
+/// Conservative f64 bounding box — no rational clones/compares (those allocate
+/// and GCD BigInts, which is too slow to run per entity per mouse move).
+fn fast_bbox_f64(c: &Curve) -> (f64, f64, f64, f64) {
+    fn join(a: (f64, f64, f64, f64), b: (f64, f64, f64, f64)) -> (f64, f64, f64, f64) {
+        (a.0.min(b.0), a.1.min(b.1), a.2.max(b.2), a.3.max(b.3))
+    }
+    match c {
+        Curve::Line(l) => {
+            let (x0, y0) = l.p0.to_f64();
+            let (x1, y1) = l.p1.to_f64();
+            (x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1))
+        }
+        Curve::Arc(a) => {
+            // Full-circle box regardless of span — conservative is fine here.
+            let (cx, cy) = a.center.to_f64();
+            let r = a.radius.to_f64();
+            (cx - r, cy - r, cx + r, cy + r)
+        }
+        Curve::Ellipse(e) => {
+            let (cx, cy) = e.center.to_f64();
+            let r = e.semi_major.to_f64().max(e.semi_minor.to_f64());
+            (cx - r, cy - r, cx + r, cy + r)
+        }
+        Curve::Bezier(b) => {
+            // Control-point hull contains the curve.
+            let pts = [b.p0.to_f64(), b.p1.to_f64(), b.p2.to_f64(), b.p3.to_f64()];
+            pts.iter().fold((f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY),
+                |acc, &(x, y)| join(acc, (x, y, x, y)))
+        }
+        Curve::Poly(p) => {
+            p.segments.iter().map(fast_bbox_f64)
+                .fold((f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY), join)
+        }
+    }
+}
+
 fn midpoint(c: &Curve) -> Option<(f64, f64)> {
     match c {
-        Curve::Line(l) => Some(l.midpoint().to_f64()), // exact rational midpoint
+        Curve::Line(l) => {
+            // f64 average — snapping is pixel-accuracy; the exact rational
+            // midpoint paid a BigInt add+GCD per line per mouse move.
+            let (x0, y0) = l.p0.to_f64();
+            let (x1, y1) = l.p1.to_f64();
+            Some(((x0 + x1) / 2.0, (y0 + y1) / 2.0))
+        }
         Curve::Arc(a) => {
             let span = (a.end_angle - a.start_angle).abs();
             if (span - 2.0 * std::f64::consts::PI).abs() < 1e-9 { return None; }
@@ -337,6 +377,39 @@ mod tests {
         let id = doc.add(EntityKind::Curve(Curve::Line(
             LineSeg::from_endpoints(pt(0, 0), pt(10, 0)))));
         (doc, id)
+    }
+
+    // Regression (user report): after a long trim session — many entities whose
+    // coordinates carry float-derived rationals — the per-frame snap scan with
+    // the default set (incl. Perpendicular/Tangent) must stay interactive. The
+    // rational midpoint/bbox math and per-eval Bézier conversions used to make
+    // the line tool visibly lag.
+    #[test]
+    fn snap_scan_stays_fast_after_many_trims() {
+        use std::time::Instant;
+        let mut doc = Document::new();
+        for i in 0..150 {
+            let x = 0.123456789012 + i as f64 * 0.37;
+            let y = 0.987654321098 + i as f64 * 0.11;
+            doc.add(EntityKind::Curve(Curve::Line(LineSeg::from_endpoints(
+                Point2d::from_f64(x, y),
+                Point2d::from_f64(x + 1.234567890123, y + 0.55)))));
+        }
+        for i in 0..20 {
+            let x = i as f64 * 2.345678901234;
+            doc.add(EntityKind::Curve(Curve::Bezier(CubicBezier::new(
+                Point2d::from_f64(x, 0.1), Point2d::from_f64(x + 0.7, 2.3),
+                Point2d::from_f64(x + 1.3, -1.7), Point2d::from_f64(x + 2.1, 0.4)))));
+        }
+        let s = SnapSettings::default(); // Endpoint..Perpendicular/Tangent
+        let start = Instant::now();
+        // 50 mouse-move frames with an active reference point (line tool state).
+        for k in 0..50 {
+            let cx = 10.0 + (k as f64) * 0.05;
+            let _ = find_snaps(&doc, (cx, 5.0), &s, Some((0.0, 0.0)));
+        }
+        assert!(start.elapsed().as_millis() < 300,
+            "snap scan too slow for interactive use: {:?}", start.elapsed());
     }
 
     // Regression: two crossing cubic Béziers must not invoke the exact algebraic

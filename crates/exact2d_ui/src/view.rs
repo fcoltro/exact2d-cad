@@ -825,7 +825,8 @@ fn tool_prompt(tool: &Tool) -> String {
             if center.is_none() { format!("Specify number of sides <{sides}> or center point") }
             else { "Specify radius".into() },
         Tool::Spline { pts } =>
-            if pts.is_empty() { "Specify start point".into() } else { format!("Specify next point ({}/4)", pts.len()) },
+            if pts.is_empty() { "Specify first control point".into() }
+            else { format!("Specify next control vertex ({} placed) — Enter/right-click finishes, C closes", pts.len()) },
         Tool::Polyline { pts } =>
             if pts.is_empty() { "Specify start point".into() } else { "Specify next point — Enter/right-click finishes".into() },
         Tool::Text { anchor, .. } =>

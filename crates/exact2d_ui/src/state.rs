@@ -259,8 +259,8 @@ impl AppState {
             return;
         }
 
-        // 1. Intercept Polyline commit / close commands
-        if let Tool::Polyline { .. } = self.tool {
+        // 1. Intercept Polyline / CV-spline commit / close commands
+        if matches!(self.tool, Tool::Polyline { .. } | Tool::Spline { .. }) {
             if trimmed.is_empty() {
                 let ev = self.tool.commit();
                 self.apply_tool_event(ev);
@@ -803,6 +803,27 @@ mod tests {
         a.run_command("");
         assert!(matches!(a.tool, Tool::Select));
         assert_eq!(a.document.len(), 2); // 1 PolyCurve entity + 1 origin
+    }
+
+    #[test]
+    fn cv_spline_command_commits_to_rational() {
+        let mut a = app();
+        a.run_command("SPLINE");
+        assert!(matches!(a.tool, Tool::Spline { .. }));
+
+        for (wx, wy) in [(0.0, 0.0), (5.0, 8.0), (10.0, -4.0), (15.0, 0.0)] {
+            let (sx, sy) = a.view.world_to_screen(wx, wy);
+            a.canvas_click(sx, sy);
+        }
+        a.run_command(""); // Enter finishes the CV spline
+        assert!(matches!(a.tool, Tool::Select));
+        assert_eq!(a.document.len(), 2); // 1 Rational curve + origin
+
+        let entity = a.document.iter().find(|e| e.id != a.origin_id).unwrap();
+        match &entity.kind {
+            EntityKind::Curve(Curve::Rational(rb)) => assert_eq!(rb.points.len(), 4),
+            other => panic!("expected a Rational curve, got {:?}", other),
+        }
     }
 
     #[test]

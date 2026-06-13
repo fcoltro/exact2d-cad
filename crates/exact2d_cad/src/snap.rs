@@ -255,6 +255,12 @@ fn fast_bbox_f64(c: &Curve) -> (f64, f64, f64, f64) {
             p.segments.iter().map(fast_bbox_f64)
                 .fold((f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY), join)
         }
+        Curve::Rational(rb) => {
+            // Control-point hull contains the curve (convex-hull property, weights > 0).
+            rb.points.iter()
+                .fold((f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY),
+                    |acc, p| join(acc, (p.x, p.y, p.x, p.y)))
+        }
     }
 }
 

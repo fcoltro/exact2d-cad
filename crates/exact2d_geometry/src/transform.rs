@@ -1,6 +1,7 @@
 use crate::point::Point2d;
 use crate::curve::Curve;
 use crate::primitives::{LineSeg, CircularArc, EllipticalArc, CubicBezier, PolyCurve};
+use crate::nurbs::RationalBezier;
 
 /// A 2-D affine transform with f64 coefficients.
 ///
@@ -165,6 +166,12 @@ impl Transform2d {
             Curve::Poly(pc) => {
                 let segs = pc.segments.iter().map(|s| self.apply_curve(s)).collect();
                 Curve::Poly(Box::new(PolyCurve::new(segs)))
+            }
+            // Rational Béziers are affine-invariant: transform the control points,
+            // keep the weights (the homogeneous denominator normalizes the affine part).
+            Curve::Rational(rb) => {
+                let points = rb.points.iter().map(|p| self.apply_point(p)).collect();
+                Curve::Rational(RationalBezier::new(points, rb.weights.clone()))
             }
         }
     }

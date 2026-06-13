@@ -8,7 +8,7 @@
 //! Older files that stored exact rationals as `num/den` still load (parsed as f64).
 
 use std::io::Write;
-use exact2d_geometry::{Curve, Point2d, LineSeg, CircularArc, EllipticalArc, CubicBezier, PolyCurve};
+use exact2d_geometry::{Curve, Point2d, LineSeg, CircularArc, EllipticalArc, CubicBezier, PolyCurve, RationalBezier};
 use exact2d_document::{Document, EntityKind, Entity, Layer, Color, LineTypeRef, LineTypeDef, Units};
 
 const TAU: f64 = std::f64::consts::TAU;
@@ -71,6 +71,8 @@ fn write_entity(s: &mut String, e: &Entity) {
         EntityKind::Curve(Curve::Bezier(b)) =>
             s.push_str(&format!("E BEZIER {} {} {} {} {} {}\n",
                 layer, color, pt(&b.p0), pt(&b.p1), pt(&b.p2), pt(&b.p3))),
+        EntityKind::Curve(Curve::Rational(rb)) =>
+            s.push_str(&format!("E RATIONAL {} {} {}\n", layer, color, rational_fields(rb))),
         EntityKind::Curve(Curve::Poly(pc)) => {
             s.push_str(&format!("E POLY {} {} {}\n", layer, color, pc.segments.len()));
             for seg in &pc.segments { write_segment(s, seg); }
@@ -91,8 +93,18 @@ fn write_segment(s: &mut String, seg: &Curve) {
             rat(a.center.x), rat(a.center.y), rat(a.radius), a.start_angle, a.end_angle)),
         Curve::Bezier(b) => s.push_str(&format!("SEG BEZIER {} {} {} {}\n",
             pt(&b.p0), pt(&b.p1), pt(&b.p2), pt(&b.p3))),
+        Curve::Rational(rb) => s.push_str(&format!("SEG RATIONAL {}\n", rational_fields(rb))),
         _ => s.push_str("SEG LINE 0;0 0;0\n"),
     }
+}
+
+/// Serialize a rational Bézier's control data: `n p0 w0 p1 w1 … p(n-1) w(n-1)`.
+fn rational_fields(rb: &RationalBezier) -> String {
+    let mut out = rb.points.len().to_string();
+    for (p, w) in rb.points.iter().zip(&rb.weights) {
+        out.push_str(&format!(" {} {}", pt(p), rat(*w)));
+    }
+    out
 }
 
 // ── Deserialize ───────────────────────────────────────────────────────────────
@@ -171,6 +183,7 @@ fn parse_entity<'a>(
             let p2 = parse_pt(tok.next()); let p3 = parse_pt(tok.next());
             Some(EntityKind::Curve(Curve::Bezier(CubicBezier::new(p0, p1, p2, p3))))
         }
+        "RATIONAL" => parse_rational(tok).map(|rb| EntityKind::Curve(Curve::Rational(rb))),
         "POINT" => Some(EntityKind::Point(parse_pt(tok.next()))),
         "TEXT" => {
             let anchor = parse_pt(tok.next());
@@ -212,8 +225,23 @@ fn parse_segment(line: &str) -> Option<Curve> {
         }
         "BEZIER" => Some(Curve::Bezier(CubicBezier::new(
             parse_pt(tok.next()), parse_pt(tok.next()), parse_pt(tok.next()), parse_pt(tok.next())))),
+        "RATIONAL" => parse_rational(&mut tok).map(Curve::Rational),
         _ => None,
     }
+}
+
+/// Parse `n p0 w0 p1 w1 … p(n-1) w(n-1)` into a `RationalBezier`; `None` if the
+/// control data is malformed (fewer than 2 points or a non-positive weight).
+fn parse_rational<'a, I: Iterator<Item = &'a str>>(tok: &mut I) -> Option<RationalBezier> {
+    let n: usize = tok.next().and_then(|v| v.parse().ok())?;
+    let mut points = Vec::with_capacity(n);
+    let mut weights = Vec::with_capacity(n);
+    for _ in 0..n {
+        points.push(parse_pt(tok.next()));
+        weights.push(parse_num(tok.next().unwrap_or("1")));
+    }
+    (points.len() >= 2 && points.len() == weights.len() && weights.iter().all(|&w| w > 0.0))
+        .then(|| RationalBezier::new(points, weights))
 }
 
 // ── Field helpers ─────────────────────────────────────────────────────────────
@@ -368,6 +396,27 @@ mod tests {
         // Text content with a space survives escaping.
         let has_text = doc2.iter().any(|e| matches!(&e.kind, EntityKind::Text { content, .. } if content == "hello world"));
         assert!(has_text);
+    }
+
+    #[test]
+    fn roundtrip_rational_is_lossless() {
+        // A weighted rational Bézier (mixed weights) must round-trip bit-exactly:
+        // control points and weights both survive (it is the authored NURBS form).
+        let mut doc = Document::new();
+        let rb = RationalBezier::new(
+            vec![pt_i(0, 0), pt_i(2, 4), pt_i(6, 4), pt_i(8, 0)],
+            vec![1.0, 2.0, 0.5, 1.0],
+        );
+        doc.add(EntityKind::Curve(Curve::Rational(rb.clone())));
+
+        let doc2 = from_string(&to_string(&doc)).unwrap();
+        let e = doc2.iter().next().expect("one entity");
+        if let EntityKind::Curve(Curve::Rational(r2)) = &e.kind {
+            assert_eq!(r2.points, rb.points, "control points must survive exactly");
+            assert_eq!(r2.weights, rb.weights, "weights must survive exactly");
+        } else {
+            panic!("expected a Rational curve after round-trip");
+        }
     }
 
     #[test]

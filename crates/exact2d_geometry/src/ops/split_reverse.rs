@@ -54,6 +54,10 @@ pub fn split_curve(curve: &Curve, t: f64) -> (Curve, Curve) {
                 Curve::Poly(Box::new(PolyCurve::new(right_segs))),
             )
         }
+        Curve::Rational(rb) => {
+            let (a, b) = rb.split(t);
+            (Curve::Rational(a), Curve::Rational(b))
+        }
     }
 }
 
@@ -78,6 +82,7 @@ pub fn reverse_curve(curve: &Curve) -> Curve {
                 .collect();
             Curve::Poly(Box::new(PolyCurve::new(reversed_segs)))
         }
+        Curve::Rational(rb) => Curve::Rational(rb.reverse()),
     }
 }
 

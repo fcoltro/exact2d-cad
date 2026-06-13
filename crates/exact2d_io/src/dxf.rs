@@ -332,6 +332,15 @@ fn write_entity(w: &mut impl FnMut(i32, &str), kind: &EntityKind, layer: &str) {
                 w(10, &fmt(p.x)); w(20, &fmt(p.y));
             }
         }
+        EntityKind::Curve(Curve::Rational(rb)) => {
+            // No native rational Bézier in base DXF → adaptive tessellated polyline.
+            let verts = crate::flatten_for_export(&Curve::Rational(rb.clone()));
+            w(0, "LWPOLYLINE"); w(8, layer);
+            w(90, &verts.len().to_string()); w(70, "0");
+            for p in &verts {
+                w(10, &fmt(p.x)); w(20, &fmt(p.y));
+            }
+        }
         EntityKind::Curve(Curve::Poly(pc)) => {
             write_polyline(w, pc, layer);
         }

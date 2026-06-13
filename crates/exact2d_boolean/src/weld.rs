@@ -11,7 +11,7 @@
 //! `Point2d::from_f64`, i.e. already requantised to ~12 significant digits, so
 //! welding also keeps the boolean inputs free of swollen BigInt denominators.
 
-use exact2d_geometry::{Curve, CurveSegment, Point2d, LineSeg, CubicBezier, PolyCurve};
+use exact2d_geometry::{Curve, CurveSegment, Point2d, LineSeg, CubicBezier, PolyCurve, RationalBezier};
 use crate::region::Region;
 
 /// Default drawing tolerance for welding boundary seams.
@@ -157,6 +157,21 @@ fn snap_endpoints(c: &Curve, s: (f64, f64), e: (f64, f64)) -> Curve {
                 segs[last_idx] = snap_endpoints(&last, start_pt, e);
             }
             Curve::Poly(Box::new(PolyCurve::new(segs)))
+        }
+        Curve::Rational(rb) => {
+            // Like a Bézier: pin the end control points, and (cubic+) shift the
+            // adjacent interior handle by the same delta to keep the end tangent.
+            let mut pts = rb.points.clone();
+            let n = pts.len();
+            let d_start = (s.0 - pts[0].x, s.1 - pts[0].y);
+            let d_end = (e.0 - pts[n - 1].x, e.1 - pts[n - 1].y);
+            if n >= 4 {
+                pts[1] = Point2d::from_f64(pts[1].x + d_start.0, pts[1].y + d_start.1);
+                pts[n - 2] = Point2d::from_f64(pts[n - 2].x + d_end.0, pts[n - 2].y + d_end.1);
+            }
+            pts[0] = Point2d::from_f64(s.0, s.1);
+            pts[n - 1] = Point2d::from_f64(e.0, e.1);
+            Curve::Rational(RationalBezier::new(pts, rb.weights.clone()))
         }
     }
 }

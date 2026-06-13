@@ -100,6 +100,10 @@ fn entity_to_svg(kind: &EntityKind, fx: &impl Fn(f64) -> f64, fy: &impl Fn(f64) 
         EntityKind::Curve(Curve::Poly(pc)) => {
             Some(format!("  <path d=\"{}\" {}/>", polycurve_path(pc, fx, fy), style))
         }
+        EntityKind::Curve(Curve::Rational(rb)) => {
+            // No native rational Bézier in SVG → adaptive tessellated polyline path.
+            Some(format!("  <path d=\"{}\" {}/>", sampled_path(&Curve::Rational(rb.clone()), fx, fy), style))
+        }
         EntityKind::Point(p) => {
             let (x, y) = p.to_f64();
             Some(format!("  <circle cx=\"{:.6}\" cy=\"{:.6}\" r=\"0.5\" fill=\"{}\"/>", fx(x), fy(y), stroke))

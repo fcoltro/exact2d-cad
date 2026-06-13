@@ -18,7 +18,7 @@
 //! the rational-Bézier form that kernel algorithms operate on.
 
 use crate::point::{Point2d, BoundingBox};
-use crate::curve::Curve;
+use crate::curve::{Curve, CurveSegment};
 
 /// A weighted rational Bézier curve segment of arbitrary degree, parameter t ∈ [0, 1].
 ///
@@ -162,6 +162,19 @@ impl RationalBezier {
     }
 }
 
+/// `RationalBezier` is a first-class curve segment (its `t ∈ [0,1]` is the Bézier
+/// parameter — NOT an angle, even for the arcs it can represent).
+impl CurveSegment for RationalBezier {
+    fn domain(&self) -> (f64, f64) { (0.0, 1.0) }
+    fn evaluate_f64(&self, t: f64) -> (f64, f64) {
+        let p = self.evaluate(t);
+        (p.x, p.y)
+    }
+    fn bounding_box(&self) -> BoundingBox { self.bounding_box() }
+    fn tangent_f64(&self, t: f64) -> (f64, f64) { self.tangent(t) }
+    fn arc_length(&self) -> f64 { self.arc_length() }
+}
+
 /// de Casteljau evaluation of a homogeneous control polygon at parameter t.
 fn de_casteljau(control: &[[f64; 3]], t: f64) -> [f64; 3] {
     let mut h = control.to_vec();
@@ -208,6 +221,7 @@ pub fn lower(curve: &Curve) -> Vec<RationalBezier> {
             }).collect()
         }
         Curve::Poly(pc) => pc.segments.iter().flat_map(lower).collect(),
+        Curve::Rational(rb) => vec![rb.clone()],
     }
 }
 
@@ -379,6 +393,41 @@ mod tests {
             let (fx, fy) = ((c.x - a.x) / (2.0 * h), (c.y - a.y) / (2.0 * h));
             assert!((tx - fx).abs() < 1e-4 && (ty - fy).abs() < 1e-4, "t={}", t);
         }
+    }
+
+    #[test]
+    fn rational_is_a_first_class_curve() {
+        // A lowered quarter arc (radius 2 at origin) authored as a Rational curve.
+        let arc = CircularArc::new(pt(0.0, 0.0), 2.0, 0.0, std::f64::consts::FRAC_PI_2);
+        let c = Curve::Rational(lower(&Curve::Arc(arc)).remove(0));
+
+        // CurveSegment dispatch: endpoints lie on the circle, length is positive.
+        let (x0, y0) = c.evaluate_f64(0.0);
+        let (x1, y1) = c.evaluate_f64(1.0);
+        assert!((x0 - 2.0).abs() < 1e-9 && y0.abs() < 1e-9);
+        assert!(x1.abs() < 1e-9 && (y1 - 2.0).abs() < 1e-9);
+        assert!(c.arc_length() > 0.0);
+
+        // lower() of a Rational is itself (one segment).
+        assert_eq!(lower(&c).len(), 1);
+
+        // split keeps both halves on the circle.
+        let (l, r) = crate::split_curve(&c, 0.5);
+        for half in [&l, &r] {
+            let (x, y) = half.evaluate_f64(0.5);
+            assert!((x.hypot(y) - 2.0).abs() < 1e-9, "split half left the circle");
+        }
+
+        // reverse swaps the endpoints.
+        let (rx, ry) = crate::reverse_curve(&c).evaluate_f64(0.0);
+        assert!(rx.abs() < 1e-9 && (ry - 2.0).abs() < 1e-9);
+
+        // An affine transform maps the control points; the result is still Rational
+        // and exactly on the translated circle.
+        let moved = crate::Transform2d::translation(10.0, 0.0).apply_curve(&c);
+        assert!(matches!(moved, Curve::Rational(_)));
+        let (mx, my) = moved.evaluate_f64(0.0);
+        assert!((mx - 12.0).abs() < 1e-9 && my.abs() < 1e-9);
     }
 
     #[test]

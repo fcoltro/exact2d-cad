@@ -2,7 +2,7 @@
 //! machine that consumes clicked points and emits `ToolEvent`s. Tools are pure and
 //! testable — they never touch the document directly; `AppState` applies the events.
 
-use exact2d_geometry::{Curve, LineSeg, CircularArc, Point2d, Transform2d, CubicBezier, PolyCurve};
+use exact2d_geometry::{Curve, LineSeg, CircularArc, Point2d, Transform2d, PolyCurve, RationalBezier};
 use exact2d_document::{EntityKind, EntityId};
 
 /// The active tool and its in-progress state.
@@ -186,19 +186,11 @@ impl Tool {
             },
 
             Tool::Spline { pts } => {
+                // CV spline: each click adds a control vertex. The curve is committed
+                // on Enter/right-click (handled by `commit`), so any number of control
+                // points is allowed.
                 pts.push(p);
-                if pts.len() == 4 {
-                    let bezier = CubicBezier::new(
-                        pts[0],
-                        pts[1],
-                        pts[2],
-                        pts[3],
-                    );
-                    *self = Tool::Spline { pts: vec![] };
-                    ToolEvent::Create(vec![EntityKind::Curve(Curve::Bezier(bezier))])
-                } else {
-                    ToolEvent::Pending
-                }
+                ToolEvent::Pending
             }
 
             Tool::Polyline { pts } => {
@@ -352,23 +344,19 @@ impl Tool {
             | Tool::Mirror { first: Some(b), .. } | Tool::Stretch { base: Some(b), .. } =>
                 vec![Curve::Line(LineSeg::from_endpoints(*b, *cursor))],
             Tool::Spline { pts } => {
-                if pts.len() == 1 {
-                    vec![Curve::Line(LineSeg::from_endpoints(pts[0], *cursor))]
-                } else if pts.len() == 2 {
-                    vec![
-                        Curve::Line(LineSeg::from_endpoints(pts[0], pts[1])),
-                        Curve::Line(LineSeg::from_endpoints(pts[1], *cursor)),
-                    ]
-                } else if pts.len() == 3 {
-                    vec![Curve::Bezier(CubicBezier::new(
-                        pts[0],
-                        pts[1],
-                        pts[2],
-                        *cursor,
-                    ))]
-                } else {
-                    vec![]
+                // Live CV preview: the control polygon (clicked vertices + cursor) plus
+                // the rational-Bézier curve it shapes, so the control-point relationship
+                // is visible as the curve is built.
+                let mut cv = pts.clone();
+                cv.push(*cursor);
+                let mut out = Vec::new();
+                for i in 0..cv.len().saturating_sub(1) {
+                    out.push(Curve::Line(LineSeg::from_endpoints(cv[i], cv[i + 1])));
                 }
+                if cv.len() >= 3 {
+                    out.push(Curve::Rational(RationalBezier::polynomial(cv)));
+                }
+                out
             }
             Tool::Polyline { pts } => {
                 let mut curves = Vec::new();
@@ -448,6 +436,11 @@ impl Tool {
                     ToolEvent::Pending
                 }
             }
+            Tool::Spline { pts } => {
+                let ev = spline_event(pts);
+                *self = Tool::Spline { pts: Vec::new() };
+                ev
+            }
             _ => ToolEvent::Pending,
         }
     }
@@ -471,8 +464,31 @@ impl Tool {
                     ToolEvent::Pending
                 }
             }
+            Tool::Spline { pts } => {
+                // Closing a CV spline repeats the first control vertex, so the rational
+                // Bézier returns to its start.
+                let mut cv = pts.clone();
+                if cv.len() >= 3 { cv.push(cv[0]); }
+                let ev = spline_event(&cv);
+                *self = Tool::Spline { pts: Vec::new() };
+                ev
+            }
             _ => ToolEvent::Pending,
         }
+    }
+}
+
+/// Build the entity a finished CV spline commits to: a `Curve::Rational` whose
+/// control polygon is the control vertices (degree = #CVs − 1, unit weights). Two
+/// vertices degrade to a line; fewer than two is a no-op.
+fn spline_event(cv: &[Point2d]) -> ToolEvent {
+    if cv.len() >= 3 {
+        let rb = RationalBezier::polynomial(cv.to_vec());
+        ToolEvent::Create(vec![EntityKind::Curve(Curve::Rational(rb))])
+    } else if cv.len() == 2 {
+        ToolEvent::Create(vec![EntityKind::Curve(Curve::Line(LineSeg::from_endpoints(cv[0], cv[1])))])
+    } else {
+        ToolEvent::Pending
     }
 }
 
@@ -642,18 +658,30 @@ mod tests {
     }
 
     #[test]
-    fn spline_needs_four_points() {
+    fn cv_spline_accumulates_and_commits_to_rational() {
         let mut t = Tool::Spline { pts: vec![] };
-        assert!(matches!(t.on_point(pt(0, 0)), ToolEvent::Pending));
-        assert!(matches!(t.on_point(pt(5, 5)), ToolEvent::Pending));
-        assert!(matches!(t.on_point(pt(10, -5)), ToolEvent::Pending));
-        match t.on_point(pt(15, 0)) {
+        // Each control-vertex click is pending — no auto-commit at any count.
+        for p in [pt(0, 0), pt(5, 5), pt(10, -5), pt(15, 0), pt(20, 6)] {
+            assert!(matches!(t.on_point(p), ToolEvent::Pending));
+        }
+        // Enter/right-click → commit() builds ONE rational Bézier whose control
+        // polygon is the 5 vertices (degree 4, unit weights).
+        match t.commit() {
             ToolEvent::Create(es) => {
                 assert_eq!(es.len(), 1);
-                assert!(matches!(es[0], EntityKind::Curve(Curve::Bezier(_))));
+                match &es[0] {
+                    EntityKind::Curve(Curve::Rational(rb)) => {
+                        assert_eq!(rb.points.len(), 5);
+                        assert_eq!(rb.degree(), 4);
+                        assert!(rb.weights.iter().all(|&w| w == 1.0));
+                    }
+                    o => panic!("expected a Rational curve, got {:?}", o),
+                }
             }
             o => panic!("{:?}", o),
         }
+        // The tool resets to an empty spline after committing.
+        assert!(matches!(t, Tool::Spline { ref pts } if pts.is_empty()));
     }
 
     #[test]

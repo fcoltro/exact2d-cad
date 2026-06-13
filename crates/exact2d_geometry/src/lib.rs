@@ -11,7 +11,7 @@ pub use primitives::{LineSeg, CircularArc, EllipticalArc, CubicBezier, PolyCurve
 pub use transform::Transform2d;
 pub use nurbs::{RationalBezier, lower, tessellate_curve};
 pub use ops::{
-    intersect, intersect_numeric, CurveIntersection,
+    intersect, CurveIntersection,
     intersect_line_line, intersect_line_circle, intersect_circle_circle,
     point_to_curve_distance, project_point_onto_curve, curve_to_curve_distance,
     ProjectionResult,

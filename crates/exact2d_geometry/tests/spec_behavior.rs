@@ -8,10 +8,10 @@ use exact2d_geometry::*;
 
 fn pt(x: i64, y: i64) -> Point2d { Point2d::from_i64(x, y) }
 
-// ── §2.2 Intersection: general resultant path (Bézier × Bézier) ───────────────
+// ── §2.2 Intersection: general numeric path (Bézier × Bézier) ─────────────────
 
 #[test]
-fn bezier_bezier_intersection_via_resultant() {
+fn bezier_bezier_intersection() {
     // Two cubic Béziers that visibly cross near the middle.
     // Arch up:  (0,0) → (3,3) → (6,3) → (9,0)   (peaks around y≈2.25)
     // Arch down:(0,3) → (3,0) → (6,0) → (9,3)   (dips around y≈0.75)
@@ -23,13 +23,13 @@ fn bezier_bezier_intersection_via_resultant() {
     // Expect at least the 2 crossings
     assert!(hits.len() >= 2, "Bézier×Bézier expected ≥2 intersections, got {}", hits.len());
 
-    // Each reported point must lie on BOTH curves (verify via implicit forms)
-    let fu = up.implicit_form();
-    let fd = down.implicit_form();
+    // Each reported point must lie on BOTH curves (verify via projection distance).
     for h in &hits {
         let (x, y) = h.point;
-        assert!(fu.eval_f64(x, y).abs() < 1.0, "pt not on up-curve: f={}", fu.eval_f64(x,y));
-        assert!(fd.eval_f64(x, y).abs() < 1.0, "pt not on down-curve: f={}", fd.eval_f64(x,y));
+        let du = project_point_onto_curve(&up, x, y);
+        let dd = project_point_onto_curve(&down, x, y);
+        assert!(du.distance < 1e-4, "pt not on up-curve: dist={}", du.distance);
+        assert!(dd.distance < 1e-4, "pt not on down-curve: dist={}", dd.distance);
     }
 }
 

@@ -14,36 +14,11 @@ pub struct CurveIntersection {
 
 // ── Fast-path specializations ─────────────────────────────────────────────────
 
-/// Line–line intersection (exact rational arithmetic).
-/// Returns `None` if the lines are parallel.
+/// Line–line (segment) intersection in f64. Returns `None` if parallel or the
+/// crossing lies outside either segment.
 pub fn intersect_line_line(l1: &LineSeg, l2: &LineSeg) -> Option<CurveIntersection> {
-    let (a1, b1, c1) = l1.implicit_coefficients();
-    let (a2, b2, c2) = l2.implicit_coefficients();
-    let det = a1.clone() * b2.clone() - a2.clone() * b1.clone();
-    if det.is_zero() { return None; }
-    let x = (b1.clone() * c2.clone() - b2.clone() * c1.clone()) / det.clone();
-    let y = (a2.clone() * c1.clone() - a1.clone() * c2.clone()) / det;
-    let (xf, yf) = (x.to_f64(), y.to_f64());
-
-    // Find parameters t1, t2 on each segment
-    let t1 = param_on_line(l1, xf, yf);
-    let t2 = param_on_line(l2, xf, yf);
-
-    if (-1e-10..=1.0 + 1e-10).contains(&t1) && (-1e-10..=1.0 + 1e-10).contains(&t2) {
-        Some(CurveIntersection { point: (xf, yf), t1, t2 })
-    } else {
-        None
-    }
-}
-
-fn param_on_line(l: &LineSeg, x: f64, y: f64) -> f64 {
-    let dx = l.p1.x - l.p0.x;
-    let dy = l.p1.y - l.p0.y;
-    let len_sq = dx * dx + dy * dy;
-    if len_sq == 0.0 { return 0.0; }
-    let nx = x - l.p0.x;
-    let ny = y - l.p0.y;
-    (nx * dx + ny * dy) / len_sq
+    intersect_segments_f64(l1.p0.to_f64(), l1.p1.to_f64(), l2.p0.to_f64(), l2.p1.to_f64())
+        .map(|(point, t1, t2)| CurveIntersection { point, t1, t2 })
 }
 
 /// Line–circle intersection (quadratic formula in f64).
@@ -240,54 +215,10 @@ fn refine_intersection(
     CurveIntersection { point, t1, t2 }
 }
 
-/// General curve-curve intersection.
-///
-/// For pairs whose implicit forms are genuine single-curve equations (conics and
-/// Béziers — everything except `PolyCurve`), this routes through the **exact
-/// algebraic kernel**: it intersects the implicit forms symbolically, then maps
-/// each exact point back to a curve parameter, discarding points that fall outside
-/// either bounded domain (the implicit forms are unbounded and may carry extra
-/// branches). PolyCurves and degenerate/identical curves fall back to numeric
-/// subdivision.
+/// General curve-curve intersection: polyline subdivision + Newton-Raphson
+/// refinement. Used for any pair involving a Bézier or PolyCurve. PolyCurves are
+/// intersected per segment so each piece hits the cheap line/arc fast paths.
 pub fn intersect_general(c1: &Curve, c2: &Curve) -> Vec<CurveIntersection> {
-    // PolyCurve's implicit form is a product over its segments (a union locus),
-    // not a single curve, so it can't use the exact path; its piecewise parameter
-    // is handled correctly by the numeric routine.
-    if matches!(c1, Curve::Poly(_)) || matches!(c2, Curve::Poly(_)) {
-        return intersect_general_numeric(c1, c2);
-    }
-
-    let f = c1.implicit_form();
-    let g = c2.implicit_form();
-    let exact_points = match f.intersect(&g) {
-        Ok(pts) => pts,
-        // Resultant vanished (shared component / identical) — defer to numeric.
-        Err(_) => return intersect_general_numeric(c1, c2),
-    };
-
-    // Keep only exact points that lie on BOTH bounded curves, recovering the
-    // parameter on each via projection (which clamps to the domain, so an
-    // off-segment point projects to an endpoint and is rejected by distance).
-    let on_curve_tol = 1e-7;
-    let mut results: Vec<CurveIntersection> = Vec::new();
-    for (xa, ya) in &exact_points {
-        let x = xa.to_f64(1e-12);
-        let y = ya.to_f64(1e-12);
-        let p1 = crate::ops::distance::project_point_onto_curve(c1, x, y);
-        if p1.distance > on_curve_tol { continue; }
-        let p2 = crate::ops::distance::project_point_onto_curve(c2, x, y);
-        if p2.distance > on_curve_tol { continue; }
-        if results.iter().all(|h| (h.point.0 - x).hypot(h.point.1 - y) > 1e-7) {
-            results.push(CurveIntersection { point: (x, y), t1: p1.t, t2: p2.t });
-        }
-    }
-    results
-}
-
-/// Numerical fallback: polyline subdivision + Newton-Raphson refinement. Used for
-/// `PolyCurve` (no single-curve implicit form) and for degenerate/identical curves
-/// where the exact resultant path can't apply.
-fn intersect_general_numeric(c1: &Curve, c2: &Curve) -> Vec<CurveIntersection> {
     // PolyCurves are intersected per segment, with each pair routed through the
     // full dispatch (so zigzag line segments hit the exact line/line and
     // line/arc paths). Sampling the WHOLE polyline with a fixed 32 chords cut
@@ -297,7 +228,7 @@ fn intersect_general_numeric(c1: &Curve, c2: &Curve) -> Vec<CurveIntersection> {
         let mut out: Vec<CurveIntersection> = Vec::new();
         for (i, seg) in p.segments.iter().enumerate() {
             let (s0, s1) = seg.domain();
-            for h in intersect_numeric(seg, c2) {
+            for h in intersect(seg, c2) {
                 let local = if (s1 - s0).abs() < 1e-12 { 0.0 } else { (h.t1 - s0) / (s1 - s0) };
                 let global = (i as f64 + local.clamp(0.0, 1.0)) / n;
                 if out.iter().all(|o| (o.point.0 - h.point.0).hypot(o.point.1 - h.point.1) >= 1e-5) {
@@ -312,7 +243,7 @@ fn intersect_general_numeric(c1: &Curve, c2: &Curve) -> Vec<CurveIntersection> {
         let mut out: Vec<CurveIntersection> = Vec::new();
         for (i, seg) in p.segments.iter().enumerate() {
             let (s0, s1) = seg.domain();
-            for h in intersect_numeric(c1, seg) {
+            for h in intersect(c1, seg) {
                 let local = if (s1 - s0).abs() < 1e-12 { 0.0 } else { (h.t2 - s0) / (s1 - s0) };
                 let global = (i as f64 + local.clamp(0.0, 1.0)) / n;
                 if out.iter().all(|o| (o.point.0 - h.point.0).hypot(o.point.1 - h.point.1) >= 1e-5) {
@@ -396,49 +327,6 @@ pub fn intersect(c1: &Curve, c2: &Curve) -> Vec<CurveIntersection> {
     }
 }
 
-/// Fast, numeric-only intersection dispatch for **interactive** use (snapping,
-/// hover previews) where pixel accuracy is enough and per-frame latency matters.
-///
-/// Identical to [`intersect`] for the cheap exact fast paths (line/line,
-/// line/arc, arc/arc), but routes every general case — anything involving a
-/// Bézier or PolyCurve — through the numeric subdivision routine instead of the
-/// exact algebraic kernel. The exact `intersect_general` path can take ~0.16s for
-/// a single Bézier×Bézier pair, which freezes the UI when run every mouse move;
-/// the numeric path is microseconds and accurate to sub-pixel for snapping.
-pub fn intersect_numeric(c1: &Curve, c2: &Curve) -> Vec<CurveIntersection> {
-    match (c1, c2) {
-        // Pure-f64 line/line and line/arc: the exact rational Cramer/quadratic
-        // paths allocate and GCD BigInts, which is too slow for the per-frame
-        // snap scan once coordinates carry float-derived denominators.
-        (Curve::Line(l1), Curve::Line(l2)) =>
-            line_line_numeric(l1, l2).into_iter().collect(),
-        (Curve::Line(l), Curve::Arc(a)) =>
-            line_circle_numeric(l, a),
-        // t1 must be the parameter on c1: swap the line/arc params back.
-        (Curve::Arc(a), Curve::Line(l)) =>
-            line_circle_numeric(l, a).into_iter()
-                .map(|h| CurveIntersection { point: h.point, t1: h.t2, t2: h.t1 })
-                .collect(),
-        (Curve::Arc(a1), Curve::Arc(a2)) =>
-            intersect_circle_circle(a1, a2),
-        _ =>
-            intersect_general_numeric(c1, c2),
-    }
-}
-
-/// f64 segment×segment intersection (numeric twin of `intersect_line_line`).
-fn line_line_numeric(l1: &LineSeg, l2: &LineSeg) -> Option<CurveIntersection> {
-    let (pa, pb) = (l1.p0.to_f64(), l1.p1.to_f64());
-    let (qa, qb) = (l2.p0.to_f64(), l2.p1.to_f64());
-    intersect_segments_f64(pa, pb, qa, qb)
-        .map(|(point, t1, t2)| CurveIntersection { point, t1, t2 })
-}
-
-/// f64 segment×arc intersection. Since `intersect_line_circle` is now itself
-/// pure f64 (Phase B), the numeric dispatch simply reuses it.
-fn line_circle_numeric(line: &LineSeg, arc: &CircularArc) -> Vec<CurveIntersection> {
-    intersect_line_circle(line, arc)
-}
 
 #[cfg(test)]
 mod tests {
@@ -460,7 +348,8 @@ mod tests {
         let x = -5.0 / 2f64.sqrt();
         let line = Curve::Line(LineSeg::from_endpoints(
             Point2d::from_f64(x, -6.0), Point2d::from_f64(x, 0.0)));
-        for hits in [intersect(&arc, &line), intersect_numeric(&arc, &line)] {
+        {
+            let hits = intersect(&arc, &line);
             assert_eq!(hits.len(), 1);
             let h = &hits[0];
             let expected = 1.25 * std::f64::consts::PI;
@@ -488,7 +377,7 @@ mod tests {
         }
         let poly = Curve::Poly(Box::new(PolyCurve::new(segs)));
         let line = Curve::Line(LineSeg::from_endpoints(pt(0, 0), pt(10, 0)));
-        let hits = intersect_numeric(&line, &poly);
+        let hits = intersect(&line, &poly);
         assert_eq!(hits.len(), 40, "every zigzag crossing must be found");
         for h in &hits {
             let (x, y) = poly.evaluate_f64(h.t2);
@@ -591,10 +480,10 @@ mod tests {
     }
 
     #[test]
-    fn ellipse_ellipse_four_points_via_exact_kernel() {
+    fn ellipse_ellipse_four_points() {
         // E1: x²/4 + y² = 1 (wide) and E2: x² + y²/4 = 1 (tall) cross at the four
-        // points (±2/√5, ±2/√5). This conic∩conic case routes through the exact
-        // implicit-kernel path (general dispatch), with domain-filtered parameters.
+        // points (±2/√5, ±2/√5). Routed through the general numeric dispatch with
+        // domain-filtered parameters.
         use crate::primitives::EllipticalArc;
         let tau = std::f64::consts::TAU;
         let e1 = Curve::Ellipse(EllipticalArc::axis_aligned(pt(0, 0), 2.0, 1.0, 0.0, tau));
@@ -603,14 +492,10 @@ mod tests {
         let hits = intersect(&e1, &e2);
         assert_eq!(hits.len(), 4, "two crossing ellipses meet in 4 points, got {}", hits.len());
 
-        let f1 = e1.implicit_form();
-        let f2 = e2.implicit_form();
         let expect = 2.0 / 5f64.sqrt();
         for h in &hits {
             let (x, y) = h.point;
-            // On both conics to high precision — far tighter than the numeric path.
-            assert!(f1.eval_f64(x, y).abs() < 1e-7, "off E1: {}", f1.eval_f64(x, y));
-            assert!(f2.eval_f64(x, y).abs() < 1e-7, "off E2: {}", f2.eval_f64(x, y));
+            // Each reported point is one of the four (±2/√5, ±2/√5) crossings.
             assert!((x.abs() - expect).abs() < 1e-6, "x={}", x);
             assert!((y.abs() - expect).abs() < 1e-6, "y={}", y);
             // Recovered parameters must lie within each ellipse's [0, τ] domain.

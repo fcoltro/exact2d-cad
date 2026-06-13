@@ -1,4 +1,3 @@
-use exact2d_algebra::BivariatePoly;
 use crate::curve::{Curve, CurveSegment};
 
 /// Tangent direction (unnormalized) at parameter t.
@@ -12,32 +11,28 @@ pub fn normal_at(curve: &Curve, t: f64) -> (f64, f64) {
     (-ty, tx)
 }
 
-/// Signed curvature κ at a world point (px, py) on an implicit curve f(x,y)=0.
+/// Signed curvature κ at parameter t, from the parametric derivatives:
+///   κ = (x'·y'' − y'·x'') / (x'² + y'²)^{3/2}
 ///
-/// Formula (Differential Geometry):
-///   κ = −(f_xx·f_y² − 2·f_xy·f_x·f_y + f_yy·f_x²) / (f_x² + f_y²)^{3/2}
-///
-/// Returns `None` if the gradient is (near) zero at the point.
-pub fn curvature_at_point(f: &BivariatePoly, px: f64, py: f64) -> Option<f64> {
-    let fx  = f.partial_x().eval_f64(px, py);
-    let fy  = f.partial_y().eval_f64(px, py);
-    let fxx = f.partial_x().partial_x().eval_f64(px, py);
-    let fxy = f.partial_x().partial_y().eval_f64(px, py);
-    let fyy = f.partial_y().partial_y().eval_f64(px, py);
-
-    let grad_sq = fx * fx + fy * fy;
-    if grad_sq < 1e-20 { return None; }
-
-    let numerator = fxx * fy * fy - 2.0 * fxy * fx * fy + fyy * fx * fx;
-    Some(-numerator / grad_sq.powf(1.5))
-}
-
-/// Signed curvature κ at parameter t on a curve.
-/// Uses the implicit form for accuracy.
+/// The first derivative is `tangent_f64`; the second is a central finite
+/// difference of the tangent (clamped to the domain). Returns `None` where the
+/// speed is (near) zero. Sign follows the CCW convention (a CCW circle → +1/r).
 pub fn curvature_at(curve: &Curve, t: f64) -> Option<f64> {
-    let (px, py) = curve.evaluate_f64(t);
-    let f = curve.implicit_form();
-    curvature_at_point(&f, px, py)
+    let (t0, t1) = curve.domain();
+    let (lo, hi) = (t0.min(t1), t0.max(t1));
+    let h = (hi - lo).max(1e-9) * 1e-4;
+    let tm = (t - h).clamp(lo, hi);
+    let tp = (t + h).clamp(lo, hi);
+    let dt = (tp - tm).max(1e-12);
+
+    let (dx, dy) = curve.tangent_f64(t);            // first derivative
+    let (txm, tym) = curve.tangent_f64(tm);
+    let (txp, typ) = curve.tangent_f64(tp);
+    let (ddx, ddy) = ((txp - txm) / dt, (typ - tym) / dt); // second derivative
+
+    let speed_sq = dx * dx + dy * dy;
+    if speed_sq < 1e-20 { return None; }
+    Some((dx * ddy - dy * ddx) / speed_sq.powf(1.5))
 }
 
 #[cfg(test)]

@@ -1,22 +1,12 @@
-use exact2d_algebra::BivariatePoly;
 use crate::point::BoundingBox;
 use crate::primitives::{LineSeg, CircularArc, EllipticalArc, CubicBezier, PolyCurve};
 
 // ── CurveSegment trait ────────────────────────────────────────────────────────
 
-/// Common interface for all curve primitives.
-///
-/// Representations:
-/// - `implicit_form()` — the exact algebraic equation f(x,y)=0 (Rational coefficients)
-/// - `evaluate_f64(t)` — fast float evaluation along the parameter domain
-///
-/// The split between exact (implicit) and numerical (evaluate/ops) is intentional:
-/// Phase 3's GPU renderer will evaluate polynomials directly; geometric operations
-/// in Phase 2 use f64 for speed and fall back to exact arithmetic where necessary.
+/// Common f64 interface for all curve primitives — evaluation, tangents, bounds,
+/// and length over the parameter domain. (Geometry is f64 + tolerance; the former
+/// exact `implicit_form()` representation was removed in the f64 migration.)
 pub trait CurveSegment {
-    /// Exact algebraic equation of the underlying infinite curve.
-    fn implicit_form(&self) -> BivariatePoly;
-
     /// Parameter domain `[t_min, t_max]` as floats.
     fn domain(&self) -> (f64, f64);
 
@@ -37,12 +27,6 @@ pub trait CurveSegment {
 
     /// Total arc length (float).
     fn arc_length(&self) -> f64;
-
-    /// Check whether (px, py) is approximately on the curve.
-    fn contains_point_f64(&self, px: f64, py: f64, tol: f64) -> bool {
-        let imp = self.implicit_form();
-        imp.eval_f64(px, py).abs() < tol && self.bounding_box().contains_point_f64(px, py)
-    }
 }
 
 // ── Curve enum ────────────────────────────────────────────────────────────────
@@ -70,15 +54,6 @@ impl Curve {
 
 /// Dispatch CurveSegment to each variant.
 impl CurveSegment for Curve {
-    fn implicit_form(&self) -> BivariatePoly {
-        match self {
-            Curve::Line(v)    => v.implicit_form(),
-            Curve::Arc(v)     => v.implicit_form(),
-            Curve::Ellipse(v) => v.implicit_form(),
-            Curve::Bezier(v)  => v.implicit_form(),
-            Curve::Poly(v)    => v.implicit_form(),
-        }
-    }
     fn domain(&self) -> (f64, f64) {
         match self {
             Curve::Line(v)    => v.domain(),

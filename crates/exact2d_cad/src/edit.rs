@@ -1,7 +1,7 @@
 //! Edit commands (spec §4.3): MOVE, COPY, ROTATE, SCALE, MIRROR, OFFSET, ERASE,
 //! TRIM, BREAK, ARRAY. All transforms are exact where the geometry permits.
 
-use exact2d_geometry::{Curve, CurveSegment, Point2d, Transform2d, LineSeg, CircularArc, offset_curve, intersect_numeric, point_to_curve_distance, split_curve};
+use exact2d_geometry::{Curve, CurveSegment, Point2d, Transform2d, LineSeg, CircularArc, offset_curve, intersect, point_to_curve_distance, split_curve};
 use exact2d_document::{Document, EntityId, EntityKind};
 
 // ── Public commands ────────────────────────────────────────────────────────────
@@ -116,7 +116,7 @@ pub fn trim(doc: &mut Document, target: EntityId, cutters: &[EntityId], px: f64,
         if cid == target { continue; }
         if let Some(cc) = doc.get(cid).and_then(|e| e.as_curve()) {
             if !target_bb.intersects(&cc.bounding_box()) { continue; }
-            for hit in intersect_numeric(&curve, cc) {
+            for hit in intersect(&curve, cc) {
                 let tn = (hit.t1 - t0) / span;
                 if tn > 1e-6 && tn < 1.0 - 1e-6 { params.push(tn); }
             }

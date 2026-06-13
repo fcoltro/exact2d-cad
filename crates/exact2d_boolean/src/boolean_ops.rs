@@ -1,5 +1,5 @@
 use exact2d_geometry::{Curve, CurveSegment, Point2d, LineSeg, CubicBezier, PolyCurve,
-                       intersect_numeric, split_curve};
+                       intersect, split_curve};
 use crate::region::Region;
 use crate::weld::{weld_region, WELD_TOL};
 
@@ -97,7 +97,7 @@ fn split_at_intersections(curve: &Curve, others: &[&Curve]) -> Vec<Curve> {
     for other in others {
         // Numeric intersection: booleans run on float-derived boundaries whose exact
         // resultants are both slow (BigInt) and not-actually-exact after welding.
-        for hit in intersect_numeric(curve, other) {
+        for hit in intersect(curve, other) {
             let t_norm = (hit.t1 - domain_lo) / domain_len;
             if t_norm > 1e-8 && t_norm < 1.0 - 1e-8 {
                 params.push(t_norm);
@@ -321,7 +321,7 @@ mod tests {
     fn boolean_over_bezier_boundary_is_fast() {
         // Regression/perf canary: a region whose boundary includes a cubic Bézier
         // used to route boolean splitting through the exact symbolic kernel
-        // (~seconds per spline pair). It now uses intersect_numeric.
+        // (~seconds per spline pair). It now uses intersect.
         let a = Region::new(vec![
             Curve::Bezier(CubicBezier::new(
                 Point2d::from_f64(0.0, 0.0), Point2d::from_f64(1.0, 3.0),

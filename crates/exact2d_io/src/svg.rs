@@ -125,12 +125,10 @@ fn arc_path(a: &CircularArc, fx: &impl Fn(f64) -> f64, fy: &impl Fn(f64) -> f64)
 }
 
 fn sampled_path(c: &Curve, fx: &impl Fn(f64) -> f64, fy: &impl Fn(f64) -> f64) -> String {
-    let (t0, t1) = c.domain();
+    // Adaptive polyline via unified tessellation — arcs/ellipses come out exact.
     let mut d = String::new();
-    for i in 0..=48 {
-        let t = t0 + (t1 - t0) * i as f64 / 48.0;
-        let (x, y) = c.evaluate_f64(t);
-        d.push_str(&format!("{} {:.6} {:.6} ", if i == 0 { "M" } else { "L" }, fx(x), fy(y)));
+    for (i, p) in crate::flatten_for_export(c).iter().enumerate() {
+        d.push_str(&format!("{} {:.6} {:.6} ", if i == 0 { "M" } else { "L" }, fx(p.x), fy(p.y)));
     }
     d.trim_end().to_string()
 }

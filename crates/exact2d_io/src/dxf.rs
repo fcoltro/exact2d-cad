@@ -323,12 +323,13 @@ fn write_entity(w: &mut impl FnMut(i32, &str), kind: &EntityKind, layer: &str) {
             w(41, &fmt(e.start_angle)); w(42, &fmt(e.end_angle));
         }
         EntityKind::Curve(Curve::Bezier(b)) => {
-            // No native cubic in base DXF here → approximate as a polyline of samples.
+            // No native cubic in base DXF here → an adaptive polyline (dense where
+            // the curve bends, sparse where it is straight) via unified tessellation.
+            let verts = crate::flatten_for_export(&Curve::Bezier(b.clone()));
             w(0, "LWPOLYLINE"); w(8, layer);
-            w(90, "17"); w(70, "0");
-            for i in 0..=16 {
-                let (x, y) = b.evaluate_f64(i as f64 / 16.0);
-                w(10, &fmt(x)); w(20, &fmt(y));
+            w(90, &verts.len().to_string()); w(70, "0");
+            for p in &verts {
+                w(10, &fmt(p.x)); w(20, &fmt(p.y));
             }
         }
         EntityKind::Curve(Curve::Poly(pc)) => {

@@ -1,4 +1,3 @@
-use exact2d_algebra::{Rational, BivariatePoly};
 use crate::point::{Point2d, BoundingBox};
 use crate::curve::CurveSegment;
 
@@ -111,28 +110,6 @@ impl CircularArc {
 // ── CurveSegment impl ─────────────────────────────────────────────────────────
 
 impl CurveSegment for CircularArc {
-    fn implicit_form(&self) -> BivariatePoly {
-        // (x - cx)² + (y - cy)² - r² = 0
-        // = x² - 2cx·x + cx² + y² - 2cy·y + cy² - r² = 0
-        // f64 endpoints/radius lifted to Rational so the symbolic kernel keeps working.
-        let cx = Rational::from_f64_approx(self.center.x);
-        let cy = Rational::from_f64_approx(self.center.y);
-        let r2 = Rational::from_f64_approx(self.radius * self.radius);
-
-        let const_term = cx.clone() * cx.clone()
-            + cy.clone() * cy.clone()
-            - r2;
-        let minus_two = Rational::from(-2i64);
-
-        BivariatePoly::from_terms(&[
-            ((2, 0), Rational::one()),
-            ((0, 2), Rational::one()),
-            ((1, 0), minus_two.clone() * cx),
-            ((0, 1), minus_two * cy),
-            ((0, 0), const_term),
-        ])
-    }
-
     fn domain(&self) -> (f64, f64) { (self.start_angle, self.end_angle) }
 
     fn evaluate_f64(&self, t: f64) -> (f64, f64) {
@@ -188,38 +165,6 @@ impl CurveSegment for CircularArc {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn r(n: i64) -> Rational { Rational::from(n) }
-    fn pt(x: i64, y: i64) -> Point2d { Point2d::from_i64(x, y) }
-
-    #[test]
-    fn implicit_unit_circle_at_origin() {
-        let arc = CircularArc::new(
-            pt(0, 0), 1.0,
-            0.0, std::f64::consts::PI,
-        );
-        let f = arc.implicit_form();
-        // Points on unit circle: (1,0), (0,1), (-1,0)
-        assert!(f.eval_rational(&r(1), &r(0)).is_zero());
-        assert!(f.eval_rational(&r(0), &r(1)).is_zero());
-        assert!(f.eval_rational(&r(-1), &r(0)).is_zero());
-        // Off circle
-        assert!(!f.eval_rational(&r(1), &r(1)).is_zero());
-    }
-
-    #[test]
-    fn implicit_shifted_circle() {
-        // Circle (x-3)²+(y-4)²=25: center (3,4), r=5
-        let arc = CircularArc::new(
-            pt(3, 4), 5.0,
-            0.0, 2.0 * std::f64::consts::PI,
-        );
-        let f = arc.implicit_form();
-        // (8,4) is on it: (8-3)²+(4-4)²=25 ✓
-        assert!(f.eval_rational(&r(8), &r(4)).is_zero());
-        // (3,9) is on it: (0)²+(5)²=25 ✓
-        assert!(f.eval_rational(&r(3), &r(9)).is_zero());
-    }
 
     #[test]
     fn three_point_construction() {

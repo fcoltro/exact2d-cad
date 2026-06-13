@@ -7,3 +7,5 @@ edition = "2021"
 
 [dependencies]
 exact2d_geometry = { path = "../exact2d_geometry" }
+# Shewchuk adaptive-precision geometric predicates (exact orientation sign).
+robust = "1"

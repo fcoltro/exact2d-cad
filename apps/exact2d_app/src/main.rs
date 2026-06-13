@@ -1,9 +1,9 @@
 //! Exact2D CAD entry point.
 //!
 //! - `exact2d_app`        → launches the egui CAD application (needs a display).
-//! - `exact2d_app demo`   → runs the algebraic-kernel demo (works headless).
+//! - `exact2d_app demo`   → runs the geometry-kernel demo (works headless).
 
-use exact2d_algebra::{BivariatePoly, Rational};
+use exact2d_geometry::{Curve, LineSeg, CircularArc, Point2d, intersect};
 use exact2d_ui::{AppState, UiState, draw_ui, egui};
 
 fn main() {
@@ -79,44 +79,36 @@ fn run_gui() -> eframe::Result<()> {
     )
 }
 
-// ── Kernel demo (Phase 1, headless) ───────────────────────────────────────────
+// ── Kernel demo (headless) ────────────────────────────────────────────────────
 
 fn run_demo() {
-    println!("=== Exact2D CAD — Algebraic Kernel Demo ===\n");
+    println!("=== Exact2D CAD — Geometry Kernel Demo ===\n");
 
-    // Line:   3x + 4y - 5 = 0
-    // Circle: x² + y² - 25 = 0
-    let line = BivariatePoly::from_terms(&[
-        ((1, 0), Rational::from(3i32)),
-        ((0, 1), Rational::from(4i32)),
-        ((0, 0), Rational::from(-5i32)),
-    ]);
-    let circle = BivariatePoly::from_terms(&[
-        ((2, 0), Rational::from(1i32)),
-        ((0, 2), Rational::from(1i32)),
-        ((0, 0), Rational::from(-25i32)),
-    ]);
+    // Line 3x + 4y - 5 = 0, as a segment long enough to span both crossings.
+    // Circle x² + y² = 25 (radius 5 at the origin).
+    let line = Curve::Line(LineSeg::from_endpoints(
+        Point2d::from_f64(-8.0, 7.25),
+        Point2d::from_f64(8.0, -4.75),
+    ));
+    let circle = Curve::Arc(CircularArc::new(
+        Point2d::from_f64(0.0, 0.0), 5.0,
+        0.0, std::f64::consts::TAU,
+    ));
 
     println!("Curve 1 (line):   3x + 4y - 5 = 0");
     println!("Curve 2 (circle): x² + y² - 25 = 0\n");
 
-    match line.intersect(&circle) {
-        Ok(intersections) => {
-            println!("Found {} intersection point(s) via exact algebraic computation:\n",
-                intersections.len());
-            for (i, (x_alg, y_alg)) in intersections.iter().enumerate() {
-                let x = x_alg.to_f64(1e-12);
-                let y = y_alg.to_f64(1e-12);
-                println!("  Point {}: x = {:.10},  y = {:.10}", i + 1, x, y);
-                let line_err = (3.0 * x + 4.0 * y - 5.0).abs();
-                let circle_err = (x * x + y * y - 25.0).abs();
-                println!("    Residual on line:   {:.2e}", line_err);
-                println!("    Residual on circle: {:.2e}", circle_err);
-            }
-        }
-        Err(e) => println!("Error: {}", e),
+    let hits = intersect(&line, &circle);
+    println!("Found {} intersection point(s):\n", hits.len());
+    for (i, h) in hits.iter().enumerate() {
+        let (x, y) = h.point;
+        println!("  Point {}: x = {:.10},  y = {:.10}", i + 1, x, y);
+        let line_err = (3.0 * x + 4.0 * y - 5.0).abs();
+        let circle_err = (x * x + y * y - 25.0).abs();
+        println!("    Residual on line:   {:.2e}", line_err);
+        println!("    Residual on circle: {:.2e}", circle_err);
     }
 
-    println!("\nAll operations performed with exact rational arithmetic.");
+    println!("\nGeometry runs on f64 + tolerance (robust, NURBS-ready kernel).");
     println!("Run `exact2d_app` (no args) to launch the interactive CAD application.");
 }

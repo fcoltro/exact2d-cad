@@ -1,11 +1,9 @@
-use exact2d_algebra::{Rational, BivariatePoly, UnivariatePoly};
 use crate::point::{Point2d, BoundingBox};
 use crate::curve::CurveSegment;
 
 /// Cubic Bézier curve defined by four control points P₀…P₃, t ∈ [0, 1].
 ///
 /// Parametric: B(t) = (1−t)³P₀ + 3(1−t)²tP₁ + 3(1−t)t²P₂ + t³P₃
-/// Implicit:   computed on demand via `BivariatePoly::implicitize`
 #[derive(Clone, Debug, PartialEq)]
 pub struct CubicBezier {
     pub p0: Point2d,
@@ -19,37 +17,6 @@ impl CubicBezier {
 
     pub fn new(p0: Point2d, p1: Point2d, p2: Point2d, p3: Point2d) -> Self {
         CubicBezier { p0, p1, p2, p3 }
-    }
-
-    // ── Bernstein polynomial form (exact Rational) ─────────────────────────────
-
-    /// x(t) as a `UnivariatePoly` in t (f64 control points lifted to Rational).
-    pub fn x_poly(&self) -> UnivariatePoly {
-        let r = Rational::from_f64_approx;
-        let (x0, x1, x2, x3) = (r(self.p0.x), r(self.p1.x), r(self.p2.x), r(self.p3.x));
-        // B(t) = x0 + (-3x0+3x1)t + (3x0-6x1+3x2)t² + (-x0+3x1-3x2+x3)t³
-        let r3 = Rational::from(3i64);
-        let r6 = Rational::from(6i64);
-        UnivariatePoly::from_coeffs(vec![
-            x0.clone(),
-            -r3.clone() * x0.clone() + r3.clone() * x1.clone(),
-            r3.clone() * x0.clone() - r6.clone() * x1.clone() + r3.clone() * x2.clone(),
-            -x0 + r3.clone() * x1 - r3 * x2 + x3,
-        ])
-    }
-
-    /// y(t) as a `UnivariatePoly` in t (f64 control points lifted to Rational).
-    pub fn y_poly(&self) -> UnivariatePoly {
-        let r = Rational::from_f64_approx;
-        let (y0, y1, y2, y3) = (r(self.p0.y), r(self.p1.y), r(self.p2.y), r(self.p3.y));
-        let r3 = Rational::from(3i64);
-        let r6 = Rational::from(6i64);
-        UnivariatePoly::from_coeffs(vec![
-            y0.clone(),
-            -r3.clone() * y0.clone() + r3.clone() * y1.clone(),
-            r3.clone() * y0.clone() - r6.clone() * y1.clone() + r3.clone() * y2.clone(),
-            -y0 + r3.clone() * y1 - r3 * y2 + y3,
-        ])
     }
 
     /// Evaluation at parameter t ∈ [0,1].
@@ -101,23 +68,11 @@ impl CubicBezier {
         [q0, q1, q2, q3, q4]
     }
 
-    // ── Properties ────────────────────────────────────────────────────────────
-
-    /// Convex hull of the four control points (just returns the points; the hull is their
-    /// bounding box for axis-aligned rendering, exact polygon in general).
-    pub fn convex_hull_points(&self) -> [&Point2d; 4] {
-        [&self.p0, &self.p1, &self.p2, &self.p3]
-    }
-
 }
 
 // ── CurveSegment impl ─────────────────────────────────────────────────────────
 
 impl CurveSegment for CubicBezier {
-    fn implicit_form(&self) -> BivariatePoly {
-        BivariatePoly::implicitize(&self.x_poly(), &self.y_poly())
-    }
-
     fn domain(&self) -> (f64, f64) { (0.0, 1.0) }
 
     fn evaluate_f64(&self, t: f64) -> (f64, f64) {
@@ -139,29 +94,21 @@ impl CurveSegment for CubicBezier {
     }
 
     fn bounding_box(&self) -> BoundingBox {
-        // Start with convex hull bounding box (conservative), then refine with extrema.
-        let pts: Vec<(f64, f64)> = self.convex_hull_points()
-            .iter().map(|p| p.to_f64()).collect();
+        // Tight bbox: the endpoints plus any interior axis-extrema (where the
+        // component derivative vanishes). The derivative of a cubic component is a
+        // quadratic, so its roots come from the quadratic formula in f64.
+        let (x0, y0) = self.p0.to_f64();
+        let (x3, y3) = self.p3.to_f64();
+        let mut xmin = x0.min(x3); let mut xmax = x0.max(x3);
+        let mut ymin = y0.min(y3); let mut ymax = y0.max(y3);
 
-        let mut xmin = pts.iter().map(|p| p.0).fold(f64::INFINITY, f64::min);
-        let mut xmax = pts.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max);
-        let mut ymin = pts.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
-        let mut ymax = pts.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max);
-
-        // Add derivative roots (where dx/dt = 0 or dy/dt = 0)
-        let xp = self.x_poly().derivative();
-        let yp = self.y_poly().derivative();
-        for t in xp.real_roots_f64(1e-10) {
-            if t > 0.0 && t < 1.0 {
-                let (x, _) = self.evaluate_f64(t);
-                xmin = xmin.min(x); xmax = xmax.max(x);
-            }
+        for &t in &deriv_roots(self.p0.x, self.p1.x, self.p2.x, self.p3.x) {
+            let (x, _) = self.evaluate_f64(t);
+            xmin = xmin.min(x); xmax = xmax.max(x);
         }
-        for t in yp.real_roots_f64(1e-10) {
-            if t > 0.0 && t < 1.0 {
-                let (_, y) = self.evaluate_f64(t);
-                ymin = ymin.min(y); ymax = ymax.max(y);
-            }
+        for &t in &deriv_roots(self.p0.y, self.p1.y, self.p2.y, self.p3.y) {
+            let (_, y) = self.evaluate_f64(t);
+            ymin = ymin.min(y); ymax = ymax.max(y);
         }
         BoundingBox::from_corners(xmin, ymin, xmax, ymax)
     }
@@ -190,6 +137,30 @@ impl CurveSegment for CubicBezier {
             acc + w * (dx * dx + dy * dy).sqrt()
         })
     }
+}
+
+/// Roots in the open interval (0, 1) of a cubic Bézier component's derivative,
+/// used for tight axis-aligned bounding boxes. With control values c0..c3 the
+/// derivative is the quadratic A·t² + B·t + C where
+///   A = -c0 + 3c1 - 3c2 + c3,  B = 2c0 - 4c1 + 2c2,  C = c1 - c0.
+fn deriv_roots(c0: f64, c1: f64, c2: f64, c3: f64) -> Vec<f64> {
+    let a = -c0 + 3.0 * c1 - 3.0 * c2 + c3;
+    let b = 2.0 * c0 - 4.0 * c1 + 2.0 * c2;
+    let c = c1 - c0;
+    let mut out = Vec::new();
+    let mut push = |t: f64| if t > 0.0 && t < 1.0 { out.push(t); };
+    if a.abs() < 1e-12 {
+        // Degenerate to a linear derivative B·t + C = 0.
+        if b.abs() > 1e-12 { push(-c / b); }
+    } else {
+        let disc = b * b - 4.0 * a * c;
+        if disc >= 0.0 {
+            let sq = disc.sqrt();
+            push((-b + sq) / (2.0 * a));
+            push((-b - sq) / (2.0 * a));
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -235,19 +206,6 @@ mod tests {
             let (ex, ey) = bz.evaluate_f64(t_val);
             assert!((ox - ex).abs() < 1e-10, "x mismatch at t={}", t_val);
             assert!((oy - ey).abs() < 1e-10, "y mismatch at t={}", t_val);
-        }
-    }
-
-    #[test]
-    fn implicit_form_on_curve() {
-        let bz = CubicBezier::new(pt(0, 0), pt(1, 2), pt(3, 2), pt(4, 0));
-        let f = bz.implicit_form();
-        // Every sampled point on the curve should satisfy f ≈ 0
-        for i in 0..=10 {
-            let t = i as f64 / 10.0;
-            let (x, y) = bz.evaluate_f64(t);
-            let val = f.eval_f64(x, y).abs();
-            assert!(val < 1.0, "t={} f={:.6}", t, val);
         }
     }
 

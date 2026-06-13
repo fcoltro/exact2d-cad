@@ -6,7 +6,6 @@ version = "0.5.0"
 edition = "2021"
 
 [dependencies]
-exact2d_algebra    = { path = "../exact2d_algebra" }
 exact2d_geometry   = { path = "../exact2d_geometry" }
 exact2d_document   = { path = "../exact2d_document" }
 exact2d_cad        = { path = "../exact2d_cad" }

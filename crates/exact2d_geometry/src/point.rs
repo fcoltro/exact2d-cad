@@ -1,8 +1,8 @@
 /// A 2-D point with f64 coordinates.
 ///
-/// (Phase B of the f64 migration: coordinates are now f64 + tolerance, not exact
-/// rationals. The symbolic `implicit_form()` machinery still exists and lifts these
-/// f64 coordinates to `Rational` on demand — that lift is removed in Phase B2.)
+/// (Phase B of the f64 migration: coordinates are f64 + tolerance, not exact
+/// rationals. The former symbolic `implicit_form()` machinery — which lifted these
+/// coordinates back to `Rational` — was removed; the geometry kernel is now pure f64.)
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Point2d {
     pub x: f64,

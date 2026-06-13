@@ -1,10 +1,7 @@
-use exact2d_algebra::{Rational, BivariatePoly};
 use crate::point::{Point2d, BoundingBox};
 use crate::curve::CurveSegment;
 
 /// A directed line segment from `p0` to `p1` with parameter t ∈ [0, 1].
-///
-/// Implicit: (y0−y1)·x + (x1−x0)·y + (x0·y1 − x1·y0) = 0
 #[derive(Clone, Debug, PartialEq)]
 pub struct LineSeg {
     pub p0: Point2d,
@@ -17,19 +14,6 @@ impl LineSeg {
     /// From two endpoints.
     pub fn from_endpoints(p0: Point2d, p1: Point2d) -> Self {
         LineSeg { p0, p1 }
-    }
-
-    // ── Implicit form ─────────────────────────────────────────────────────────
-
-    /// Returns the coefficients (a, b, c) for ax + by + c = 0.
-    /// a = y0 - y1,  b = x1 - x0,  c = x0*y1 - x1*y0
-    ///
-    /// Lifts the f64 endpoints to `Rational` so the symbolic kernel keeps working.
-    pub fn implicit_coefficients(&self) -> (Rational, Rational, Rational) {
-        let a = self.p0.y - self.p1.y;
-        let b = self.p1.x - self.p0.x;
-        let c = self.p0.x * self.p1.y - self.p1.x * self.p0.y;
-        (Rational::from_f64_approx(a), Rational::from_f64_approx(b), Rational::from_f64_approx(c))
     }
 
     // ── Properties ────────────────────────────────────────────────────────────
@@ -99,15 +83,6 @@ impl LineSeg {
 // ── CurveSegment impl ─────────────────────────────────────────────────────────
 
 impl CurveSegment for LineSeg {
-    fn implicit_form(&self) -> BivariatePoly {
-        let (a, b, c) = self.implicit_coefficients();
-        BivariatePoly::from_terms(&[
-            ((1, 0), a),
-            ((0, 1), b),
-            ((0, 0), c),
-        ])
-    }
-
     fn domain(&self) -> (f64, f64) { (0.0, 1.0) }
 
     fn evaluate_f64(&self, t: f64) -> (f64, f64) {
@@ -145,38 +120,7 @@ impl CurveSegment for LineSeg {
 mod tests {
     use super::*;
 
-    fn r(n: i64) -> Rational { Rational::from(n) }
     fn pt(x: i64, y: i64) -> Point2d { Point2d::from_i64(x, y) }
-
-    #[test]
-    fn implicit_form_horizontal() {
-        // y = 2 horizontal segment from (0,2) to (5,2)
-        let seg = LineSeg::from_endpoints(pt(0, 2), pt(5, 2));
-        let (a, b, c) = seg.implicit_coefficients();
-        // a = y0 - y1 = 0, b = x1 - x0 = 5, c = x0*y1 - x1*y0 = 0*2 - 5*2 = -10
-        // => 0*x + 5*y - 10 = 0  =>  y = 2  ✓
-        assert_eq!(a, r(0));
-        assert_eq!(b, r(5));
-        assert_eq!(c, r(-10));
-        let f = seg.implicit_form();
-        // Should evaluate to 0 at both endpoints
-        assert!(f.eval_rational(&r(0), &r(2)).is_zero());
-        assert!(f.eval_rational(&r(5), &r(2)).is_zero());
-        // Should be non-zero off the line
-        assert!(!f.eval_rational(&r(3), &r(3)).is_zero());
-    }
-
-    #[test]
-    fn implicit_form_diagonal() {
-        // y = x  diagonal: (0,0) → (3,3)
-        let seg = LineSeg::from_endpoints(pt(0, 0), pt(3, 3));
-        let f = seg.implicit_form();
-        // Every point on y=x should satisfy f=0
-        for v in [0i64, 1, 2, 3] {
-            assert!(f.eval_rational(&r(v), &r(v)).is_zero());
-        }
-        assert!(!f.eval_rational(&r(1), &r(2)).is_zero());
-    }
 
     #[test]
     fn midpoint_and_split() {

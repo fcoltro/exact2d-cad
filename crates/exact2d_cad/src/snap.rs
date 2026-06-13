@@ -5,7 +5,7 @@
 
 use exact2d_geometry::{
     Curve, CurveSegment, Point2d,
-    intersect_numeric, project_point_onto_curve,
+    intersect, project_point_onto_curve,
 };
 use exact2d_document::{Document, EntityKind, EntityId};
 
@@ -173,7 +173,7 @@ pub fn find_snaps(
         // the exact Bézier×Bézier path takes ~0.16s per pair and freezes the UI.
         for i in 0..curves.len() {
             for j in (i + 1)..curves.len() {
-                for hit in intersect_numeric(curves[i].1, curves[j].1) {
+                for hit in intersect(curves[i].1, curves[j].1) {
                     push_if_near(&mut out, SnapKind::Intersection, hit.point, curves[i].0, cursor, tol);
                 }
             }
@@ -413,7 +413,7 @@ mod tests {
 
     // Regression: two crossing cubic Béziers must not invoke the exact algebraic
     // intersection kernel during snapping (it takes ~0.16s per pair and froze the
-    // UI on every mouse move). Intersection snapping uses `intersect_numeric`, so a
+    // UI on every mouse move). Intersection snapping uses `intersect`, so a
     // full `find_snaps` over two splines should complete in well under a frame.
     #[test]
     fn intersection_snap_over_two_beziers_is_fast() {

@@ -1,4 +1,3 @@
-use exact2d_algebra::BivariatePoly;
 use crate::point::BoundingBox;
 use crate::curve::{Curve, CurveSegment};
 
@@ -68,18 +67,6 @@ impl PolyCurve {
 // ── CurveSegment impl ─────────────────────────────────────────────────────────
 
 impl CurveSegment for PolyCurve {
-    fn implicit_form(&self) -> BivariatePoly {
-        // Implicit form of a polycurve is the product of all segment implicit forms.
-        // This represents the union of all curve loci (useful for bounding / intersection).
-        // Phase 2 note: for boolean ops, individual segment forms are queried; the product
-        // is provided here for API completeness.
-        if self.segments.is_empty() { return BivariatePoly::zero(); }
-        self.segments.iter().skip(1).fold(
-            self.segments[0].implicit_form(),
-            |acc, seg| acc * seg.implicit_form(),
-        )
-    }
-
     fn domain(&self) -> (f64, f64) {
         if self.segments.is_empty() { return (0.0, 1.0); }
         (self.segments[0].domain().0,

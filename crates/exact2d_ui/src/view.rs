@@ -392,6 +392,21 @@ fn canvas(ctx: &Context, app: &mut AppState, ui_state: &mut UiState, palette_ope
             ui_state.command_input.push_str(&text_to_append);
             ctx.memory_mut(|mem| mem.request_focus(cmd_input_id));
         }
+
+        // Polygon: the moment the tool enters side-entry (center not yet placed),
+        // focus the command line ONCE so the user can just type the side count and
+        // press Enter (then click the center) — otherwise typed digits go nowhere
+        // until the canvas happens to be hovered, which reads as "can't set sides".
+        let poly_focus_armed = egui::Id::new("polygon_sides_focus_armed");
+        if matches!(app.tool, Tool::Polygon { center: None, .. }) {
+            let armed = ctx.data(|d| d.get_temp::<bool>(poly_focus_armed).unwrap_or(false));
+            if !armed && !palette_open && !hud_focused {
+                ctx.memory_mut(|mem| mem.request_focus(cmd_input_id));
+                ctx.data_mut(|d| d.insert_temp(poly_focus_armed, true));
+            }
+        } else {
+            ctx.data_mut(|d| d.insert_temp(poly_focus_armed, false));
+        }
         // AutoCAD hotkeys: F7 = Grid, F8 = Ortho, F9 = Snap
         if ui.input(|i| i.key_pressed(egui::Key::F7)) {
             app.grid_on = !app.grid_on;
@@ -901,8 +916,8 @@ fn tool_prompt(tool: &Tool) -> String {
         Tool::Mirror { first, .. } =>
             if first.is_none() { "Specify first point of mirror axis".into() } else { "Specify second point of mirror axis".into() },
         Tool::Polygon { center, sides } =>
-            if center.is_none() { format!("Specify number of sides <{sides}> or center point") }
-            else { "Specify radius".into() },
+            if center.is_none() { format!("Type number of sides <{sides}> + Enter, then click the center") }
+            else { "Click to set the radius".into() },
         Tool::Spline { pts } =>
             if pts.is_empty() { "Specify first control point".into() }
             else { format!("Specify next control vertex ({} placed) — Enter/right-click finishes, C closes", pts.len()) },

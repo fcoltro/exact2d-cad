@@ -231,6 +231,10 @@ fn tool_icon(ui: &mut egui::Ui, app: &mut AppState, icon: crate::icons::Icon, ti
 pub(super) fn status_and_command(ctx: &Context, app: &mut AppState, ui_state: &mut UiState) {
     TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
         ui.horizontal(|ui| {
+            // Version at the bottom-left (tracks the crate version at compile time).
+            ui.label(egui::RichText::new(concat!("Exact2D CAD v", env!("CARGO_PKG_VERSION")))
+                .size(11.0).color(egui::Color32::from_gray(140)));
+            ui.separator();
             // Monospace + minimum width so the readout doesn't jitter the bar.
             let coords = egui::RichText::new(format!("{:>22}", app.coord_readout()))
                 .monospace().size(12.0);

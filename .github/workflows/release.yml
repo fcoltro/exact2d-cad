@@ -65,7 +65,9 @@ jobs:
           recent distro (Ubuntu 22.04+, Debian 12+, Fedora 36+, or newer).
           EOF
           tar czf "${STAGE}.tar.gz" "$STAGE"
+          sha256sum "${STAGE}.tar.gz" > "${STAGE}.tar.gz.sha256"
           echo "asset=${STAGE}.tar.gz" >> "$GITHUB_OUTPUT"
+          echo "sum=${STAGE}.tar.gz.sha256" >> "$GITHUB_OUTPUT"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
@@ -77,7 +79,9 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ steps.pkg.outputs.asset }}
+          files: |
+            ${{ steps.pkg.outputs.asset }}
+            ${{ steps.pkg.outputs.sum }}
           generate_release_notes: true
 
   build-windows:
@@ -120,7 +124,10 @@ jobs:
           code-signed).
           "@ | Set-Content "$stage\RUN.txt" -Encoding utf8
           Compress-Archive -Path $stage -DestinationPath "$stage.zip"
+          $hash = (Get-FileHash "$stage.zip" -Algorithm SHA256).Hash.ToLower()
+          "$hash  $stage.zip" | Out-File "$stage.zip.sha256" -Encoding ascii
           "asset=$stage.zip" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "sum=$stage.zip.sha256" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
@@ -132,5 +139,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ steps.pkg.outputs.asset }}
+          files: |
+            ${{ steps.pkg.outputs.asset }}
+            ${{ steps.pkg.outputs.sum }}
           generate_release_notes: true

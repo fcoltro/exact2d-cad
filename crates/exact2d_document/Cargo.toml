@@ -1,9 +1,10 @@
 [package]
-# Proprietary, all rights reserved â€” never publish to crates.io.
+# Licensed under GPL-3.0-or-later (see LICENSE). Not published to crates.io.
 publish = false
 name = "exact2d_document"
 version = "0.6.1"
 edition = "2021"
+license = "GPL-3.0-or-later"
 
 [dependencies]
 exact2d_geometry = { path = "../exact2d_geometry" }

@@ -1,3 +1,8 @@
+// Release builds are GUI apps: don't allocate a Windows console (no flashing
+// terminal alongside the window). Debug builds keep the console for dev output
+// (`cargo run`, the headless `demo` mode, panic traces).
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 //! Exact2D CAD entry point.
 //!
 //! - `exact2d_app`        → launches the egui CAD application (needs a display).

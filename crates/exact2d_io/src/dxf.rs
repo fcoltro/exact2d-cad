@@ -375,6 +375,14 @@ fn write_polyline(w: &mut impl FnMut(i32, &str), pc: &PolyCurve, layer: &str) {
                 let signed = if a.end_angle >= a.start_angle { theta } else { -theta };
                 verts.push((sx, sy, (signed / 4.0).tan()));
             }
+            Curve::Rational(_) => {
+                // No native rational Bézier in LWPOLYLINE → tessellate to straight
+                // vertices (all but the last; the join is the next segment's start).
+                let poly = crate::flatten_for_export(seg);
+                for p in &poly[..poly.len().saturating_sub(1)] {
+                    verts.push((p.x, p.y, 0.0));
+                }
+            }
             _ => {
                 let (x, y) = seg.evaluate_f64(seg.domain().0);
                 verts.push((x, y, 0.0));

@@ -420,6 +420,26 @@ mod tests {
     }
 
     #[test]
+    fn roundtrip_polycurve_of_rational_segments() {
+        // The CV-spline B-spline output (a PolyCurve of rational segments) must
+        // round-trip via the SEG RATIONAL records.
+        let seg = || RationalBezier::new(
+            vec![pt_i(0, 0), pt_i(1, 2), pt_i(3, 2), pt_i(4, 0)], vec![1.0, 1.0, 1.0, 1.0]);
+        let mut doc = Document::new();
+        doc.add(EntityKind::Curve(Curve::Poly(Box::new(
+            PolyCurve::new(vec![Curve::Rational(seg()), Curve::Rational(seg())])))));
+
+        let doc2 = from_string(&to_string(&doc)).unwrap();
+        let e = doc2.iter().next().expect("one entity");
+        if let EntityKind::Curve(Curve::Poly(pc)) = &e.kind {
+            assert_eq!(pc.segments.len(), 2);
+            assert!(pc.segments.iter().all(|s| matches!(s, Curve::Rational(_))));
+        } else {
+            panic!("expected a PolyCurve of rational segments");
+        }
+    }
+
+    #[test]
     fn roundtrip_polycurve() {
         let mut doc = Document::new();
         let segs = vec![

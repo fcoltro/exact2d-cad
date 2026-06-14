@@ -165,6 +165,16 @@ fn polycurve_path(pc: &PolyCurve, fx: &impl Fn(f64) -> f64, fy: &impl Fn(f64) ->
                 let large = if a.included_angle() > std::f64::consts::PI { 1 } else { 0 };
                 d.push_str(&format!("A {:.6} {:.6} 0 {} 0 {:.6} {:.6} ", r, r, large, fx(ex), fy(ey)));
             }
+            Curve::Rational(_) => {
+                // No native rational Bézier in SVG paths → adaptive tessellation.
+                let poly = crate::flatten_for_export(seg);
+                if let Some(p0) = poly.first() {
+                    if first { d.push_str(&format!("M {:.6} {:.6} ", fx(p0.x), fy(p0.y))); first = false; }
+                }
+                for p in poly.iter().skip(1) {
+                    d.push_str(&format!("L {:.6} {:.6} ", fx(p.x), fy(p.y)));
+                }
+            }
             other => {
                 let (x, y) = other.evaluate_f64(other.domain().1);
                 d.push_str(&format!("L {:.6} {:.6} ", fx(x), fy(y)));

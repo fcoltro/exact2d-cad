@@ -263,6 +263,74 @@ fn unit_arc_segments(a0: f64, a1: f64) -> Vec<([[f64; 2]; 3], f64)> {
     }).collect()
 }
 
+// ── Control-vertex spline (clamped cubic B-spline) ─────────────────────────────
+
+/// Rational-Bézier segments of a control-vertex spline, from its control polygon.
+///
+/// - 2–4 control vertices → a single Bézier of degree (len − 1).
+/// - ≥5 → a **clamped cubic B-spline**: local control, the curve passes through the
+///   first and last vertex and is C² across joints, returned as cubic segments.
+///
+/// Fewer than 2 vertices yields nothing. All weights are 1 (a uniform B-spline is
+/// polynomial); per-vertex weights are a later editing feature.
+pub fn cv_spline_segments(cvs: &[Point2d]) -> Vec<RationalBezier> {
+    match cvs.len() {
+        0 | 1 => vec![],
+        2..=4 => vec![RationalBezier::polynomial(cvs.to_vec())],
+        _ => clamped_cubic_bspline(cvs),
+    }
+}
+
+/// Decompose a clamped cubic B-spline (uniform interior knots) through `cvs` into
+/// cubic Bézier segments via Böhm knot insertion. `cvs.len()` must be ≥ 4.
+fn clamped_cubic_bspline(cvs: &[Point2d]) -> Vec<RationalBezier> {
+    const P: usize = 3;
+    let n = cvs.len() - 1;        // last control-point index
+    let interior = n - P;         // number of distinct interior knots (≥ 1 here)
+
+    // Clamped uniform knot vector: P+1 zeros, 1..=interior, then P+1 copies of interior+1.
+    let mut knots: Vec<f64> = vec![0.0; P + 1];
+    for i in 1..=interior { knots.push(i as f64); }
+    knots.extend(std::iter::repeat_n((interior + 1) as f64, P + 1));
+
+    // Raise every interior knot to multiplicity P; the control points then partition
+    // into cubic Bézier segments sharing endpoints.
+    let mut pts = cvs.to_vec();
+    for k in 1..=interior {
+        let val = k as f64;
+        let mult = knots.iter().filter(|&&x| (x - val).abs() < 1e-9).count();
+        for _ in mult..P {
+            knot_insert(&mut knots, &mut pts, val, P);
+        }
+    }
+
+    (0..=interior).map(|s| {
+        let b = s * P;
+        RationalBezier::polynomial(vec![pts[b], pts[b + 1], pts[b + 2], pts[b + 3]])
+    }).collect()
+}
+
+/// Insert knot `val` once into a degree-`p` B-spline (Böhm), updating `knots`/`pts`.
+fn knot_insert(knots: &mut Vec<f64>, pts: &mut Vec<Point2d>, val: f64, p: usize) {
+    // Span k: the last index with knots[k] <= val < knots[k+1].
+    let mut k = p;
+    while k + 1 < knots.len() && !(knots[k] <= val && val < knots[k + 1]) { k += 1; }
+
+    let mut out: Vec<Point2d> = Vec::with_capacity(pts.len() + 1);
+    out.extend_from_slice(&pts[..=k - p]);                 // unchanged front
+    for i in (k - p + 1)..=k {
+        let denom = knots[i + p] - knots[i];
+        let a = if denom.abs() < 1e-12 { 0.0 } else { (val - knots[i]) / denom };
+        let prev = pts[i - 1];
+        let cur = pts[i];
+        out.push(Point2d::new((1.0 - a) * prev.x + a * cur.x,
+                              (1.0 - a) * prev.y + a * cur.y));
+    }
+    out.extend_from_slice(&pts[k..]);                      // unchanged tail (shifted)
+    *pts = out;
+    knots.insert(k + 1, val);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -392,6 +460,54 @@ mod tests {
             let c = seg.evaluate(t + h);
             let (fx, fy) = ((c.x - a.x) / (2.0 * h), (c.y - a.y) / (2.0 * h));
             assert!((tx - fx).abs() < 1e-4 && (ty - fy).abs() < 1e-4, "t={}", t);
+        }
+    }
+
+    #[test]
+    fn cv_spline_four_points_is_single_cubic() {
+        let cvs = vec![pt(0.0, 0.0), pt(1.0, 2.0), pt(3.0, 2.0), pt(4.0, 0.0)];
+        let segs = cv_spline_segments(&cvs);
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].degree(), 3);
+        assert_eq!(segs[0].points, cvs, "4 CVs = the cubic Bézier through them");
+    }
+
+    #[test]
+    fn cv_spline_clamped_cubic_bspline_properties() {
+        let cvs = vec![pt(0.0, 0.0), pt(1.0, 3.0), pt(3.0, 3.0),
+                       pt(5.0, -1.0), pt(7.0, 2.0), pt(9.0, 0.0)];
+        let segs = cv_spline_segments(&cvs);
+        assert_eq!(segs.len(), cvs.len() - 3, "6 CVs → 3 cubic spans");
+        for s in &segs { assert_eq!(s.degree(), 3); }
+
+        // Clamped: the curve passes through the first and last control vertex.
+        let start = segs.first().unwrap().evaluate(0.0);
+        let end = segs.last().unwrap().evaluate(1.0);
+        assert!((start.x - 0.0).abs() < 1e-9 && (start.y - 0.0).abs() < 1e-9, "start {start:?}");
+        assert!((end.x - 9.0).abs() < 1e-9 && (end.y - 0.0).abs() < 1e-9, "end {end:?}");
+
+        // Joints are C0 (coincident) and G1 (tangent directions match).
+        for w in segs.windows(2) {
+            let a = w[0].evaluate(1.0);
+            let b = w[1].evaluate(0.0);
+            assert!((a.x - b.x).abs() < 1e-9 && (a.y - b.y).abs() < 1e-9, "join gap");
+            let (t0x, t0y) = w[0].tangent(1.0);
+            let (t1x, t1y) = w[1].tangent(0.0);
+            let cross = t0x * t1y - t0y * t1x;
+            let dot = t0x * t1x + t0y * t1y;
+            let mag = t0x.hypot(t0y) * t1x.hypot(t1y);
+            assert!(cross.abs() < 1e-6 * mag.max(1.0) && dot > 0.0, "G1 break at joint");
+        }
+
+        // Convex-hull property: every sample lies within the control-point bbox.
+        let (mut xmn, mut xmx, mut ymn, mut ymx) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
+        for c in &cvs { xmn = xmn.min(c.x); xmx = xmx.max(c.x); ymn = ymn.min(c.y); ymx = ymx.max(c.y); }
+        for s in &segs {
+            for i in 0..=10 {
+                let q = s.evaluate(i as f64 / 10.0);
+                assert!(q.x >= xmn - 1e-9 && q.x <= xmx + 1e-9 && q.y >= ymn - 1e-9 && q.y <= ymx + 1e-9,
+                    "sample {q:?} outside control hull");
+            }
         }
     }
 

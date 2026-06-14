@@ -2,7 +2,7 @@
 # Proprietary, all rights reserved â€” never publish to crates.io.
 publish = false
 name = "exact2d_document"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2021"
 
 [dependencies]

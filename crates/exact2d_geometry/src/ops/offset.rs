@@ -21,9 +21,9 @@ pub fn offset_curve(curve: &Curve, dist: f64) -> Curve {
             // Here we use a 4-point Hermite fitting with end tangents preserved.
             offset_bezier_approx(bz, dist)
         }
-        Curve::Ellipse(_) | Curve::Poly(_) | Curve::Rational(_) => {
-            // Ellipses, polycurves, and rational Béziers fall back to point-sampling
-            // (the exact offset of a rational Bézier is not itself a rational Bézier).
+        Curve::Ellipse(_) | Curve::Poly(_) | Curve::Rational(_) | Curve::Nurbs(_) => {
+            // Ellipses, polycurves, rational Béziers, and NURBS fall back to
+            // point-sampling (their exact offset is not the same curve type).
             offset_by_sampling(curve, dist)
         }
     }

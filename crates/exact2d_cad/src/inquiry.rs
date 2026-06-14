@@ -60,6 +60,8 @@ pub fn list_entity(doc: &Document, id: EntityId) -> Option<String> {
         EntityKind::Curve(Curve::Bezier(_)) => "SPLINE (cubic Bézier)".to_string(),
         EntityKind::Curve(Curve::Rational(rb)) =>
             format!("SPLINE (rational Bézier, degree {}, {} control points)", rb.degree(), rb.points.len()),
+        EntityKind::Curve(Curve::Nurbs(nc)) =>
+            format!("NURBS SPLINE ({} control vertices)", nc.control.len()),
         EntityKind::Curve(Curve::Poly(p)) => format!("POLYLINE  {} segments", p.segments.len()),
         EntityKind::Point(p) => format!("POINT  ({},{})", p.x, p.y),
         EntityKind::Text { content, .. } => format!("TEXT  \"{}\"", content),

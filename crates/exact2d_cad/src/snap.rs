@@ -261,6 +261,12 @@ fn fast_bbox_f64(c: &Curve) -> (f64, f64, f64, f64) {
                 .fold((f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY),
                     |acc, p| join(acc, (p.x, p.y, p.x, p.y)))
         }
+        Curve::Nurbs(nc) => {
+            // Same convex-hull property over the control vertices.
+            nc.control.iter()
+                .fold((f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY),
+                    |acc, p| join(acc, (p.x, p.y, p.x, p.y)))
+        }
     }
 }
 

@@ -222,6 +222,7 @@ pub fn lower(curve: &Curve) -> Vec<RationalBezier> {
         }
         Curve::Poly(pc) => pc.segments.iter().flat_map(lower).collect(),
         Curve::Rational(rb) => vec![rb.clone()],
+        Curve::Nurbs(nc) => nc.segments(),
     }
 }
 
@@ -263,29 +264,108 @@ fn unit_arc_segments(a0: f64, a1: f64) -> Vec<([[f64; 2]; 3], f64)> {
     }).collect()
 }
 
-// ── Control-vertex spline (clamped cubic B-spline) ─────────────────────────────
+// ── Control-vertex spline / NURBS (clamped cubic B-spline) ─────────────────────
 
-/// Rational-Bézier segments of a control-vertex spline, from its control polygon.
-///
-/// - 2–4 control vertices → a single Bézier of degree (len − 1).
-/// - ≥5 → a **clamped cubic B-spline**: local control, the curve passes through the
-///   first and last vertex and is C² across joints, returned as cubic segments.
-///
-/// Fewer than 2 vertices yields nothing. All weights are 1 (a uniform B-spline is
-/// polynomial); per-vertex weights are a later editing feature.
-pub fn cv_spline_segments(cvs: &[Point2d]) -> Vec<RationalBezier> {
-    match cvs.len() {
-        0 | 1 => vec![],
-        2..=4 => vec![RationalBezier::polynomial(cvs.to_vec())],
-        _ => clamped_cubic_bspline(cvs),
+/// A clamped cubic **NURBS** / control-vertex spline: control vertices + per-vertex
+/// weights. This is the authored, *editable* form — grips edit `control`, weight
+/// handles edit `weights`. It decomposes to rational Bézier `segments` for every
+/// kernel operation and for rendering.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NurbsCurve {
+    /// Control vertices (the points you place / drag).
+    pub control: Vec<Point2d>,
+    /// Per-vertex weights (same length as `control`; all strictly positive). All 1 =
+    /// a uniform polynomial B-spline; raising a weight pulls the curve toward that CV.
+    pub weights: Vec<f64>,
+}
+
+impl NurbsCurve {
+    pub fn new(control: Vec<Point2d>, weights: Vec<f64>) -> Self {
+        assert_eq!(control.len(), weights.len(), "control and weights must match in length");
+        assert!(control.len() >= 2, "a spline needs at least two control vertices");
+        assert!(weights.iter().all(|&w| w > 0.0), "weights must be strictly positive");
+        NurbsCurve { control, weights }
+    }
+
+    /// A uniform (unit-weight) spline through the control vertices.
+    pub fn uniform(control: Vec<Point2d>) -> Self {
+        let weights = vec![1.0; control.len()];
+        NurbsCurve::new(control, weights)
+    }
+
+    /// The rational Bézier segments this spline decomposes to.
+    pub fn segments(&self) -> Vec<RationalBezier> {
+        cv_spline_segments_weighted(&self.control, &self.weights)
     }
 }
 
-/// Decompose a clamped cubic B-spline (uniform interior knots) through `cvs` into
-/// cubic Bézier segments via Böhm knot insertion. `cvs.len()` must be ≥ 4.
-fn clamped_cubic_bspline(cvs: &[Point2d]) -> Vec<RationalBezier> {
+/// `NurbsCurve` is a first-class curve segment: every operation goes through its
+/// rational-Bézier decomposition (`segments`). Parameter `t ∈ [0,1]` spans the
+/// whole curve, split evenly across the segments.
+impl CurveSegment for NurbsCurve {
+    fn domain(&self) -> (f64, f64) { (0.0, 1.0) }
+    fn evaluate_f64(&self, t: f64) -> (f64, f64) {
+        let segs = self.segments();
+        if segs.is_empty() { return (0.0, 0.0); }
+        let (i, lt) = seg_param(segs.len(), t);
+        segs[i].evaluate_f64(lt)
+    }
+    fn tangent_f64(&self, t: f64) -> (f64, f64) {
+        let segs = self.segments();
+        if segs.is_empty() { return (0.0, 0.0); }
+        let (i, lt) = seg_param(segs.len(), t);
+        segs[i].tangent_f64(lt)
+    }
+    fn bounding_box(&self) -> BoundingBox {
+        // Convex-hull property: the control polygon contains the curve.
+        let mut xmin = f64::INFINITY; let mut xmax = f64::NEG_INFINITY;
+        let mut ymin = f64::INFINITY; let mut ymax = f64::NEG_INFINITY;
+        for p in &self.control {
+            xmin = xmin.min(p.x); xmax = xmax.max(p.x);
+            ymin = ymin.min(p.y); ymax = ymax.max(p.y);
+        }
+        BoundingBox::from_corners(xmin, ymin, xmax, ymax)
+    }
+    fn arc_length(&self) -> f64 {
+        self.segments().iter().map(|s| s.arc_length()).sum()
+    }
+}
+
+/// Map global `t ∈ [0,1]` to `(segment index, local t ∈ [0,1])` for `n` equal segments.
+fn seg_param(n: usize, t: f64) -> (usize, f64) {
+    let scaled = t.clamp(0.0, 1.0) * n as f64;
+    let i = (scaled.floor() as usize).min(n - 1);
+    (i, scaled - i as f64)
+}
+
+/// Rational-Bézier segments of a control-vertex spline (unit weights).
+pub fn cv_spline_segments(cvs: &[Point2d]) -> Vec<RationalBezier> {
+    cv_spline_segments_weighted(cvs, &vec![1.0; cvs.len()])
+}
+
+/// Rational-Bézier segments of a (possibly non-uniform rational) control-vertex
+/// spline: 2–4 control vertices → a single rational Bézier of degree (len − 1); ≥5 →
+/// a clamped cubic **NURBS** decomposed via homogeneous Böhm knot insertion (local
+/// control, passes through the first/last vertex; C² joints where weights are
+/// uniform). `cvs` and `weights` must be equal length with weights > 0. <2 → nothing.
+pub fn cv_spline_segments_weighted(cvs: &[Point2d], weights: &[f64]) -> Vec<RationalBezier> {
+    match cvs.len() {
+        0 | 1 => vec![],
+        2..=4 => vec![RationalBezier::new(cvs.to_vec(), weights.to_vec())],
+        _ => {
+            let h: Vec<[f64; 3]> = cvs.iter().zip(weights)
+                .map(|(p, &w)| [w * p.x, w * p.y, w]).collect();
+            clamped_cubic_bspline_homog(&h)
+        }
+    }
+}
+
+/// Decompose a clamped cubic B-spline given as homogeneous control points
+/// `[w·x, w·y, w]` (uniform interior knots) into rational cubic Bézier segments via
+/// Böhm knot insertion. `h.len()` must be ≥ 4.
+fn clamped_cubic_bspline_homog(h: &[[f64; 3]]) -> Vec<RationalBezier> {
     const P: usize = 3;
-    let n = cvs.len() - 1;        // last control-point index
+    let n = h.len() - 1;          // last control-point index
     let interior = n - P;         // number of distinct interior knots (≥ 1 here)
 
     // Clamped uniform knot vector: P+1 zeros, 1..=interior, then P+1 copies of interior+1.
@@ -295,36 +375,38 @@ fn clamped_cubic_bspline(cvs: &[Point2d]) -> Vec<RationalBezier> {
 
     // Raise every interior knot to multiplicity P; the control points then partition
     // into cubic Bézier segments sharing endpoints.
-    let mut pts = cvs.to_vec();
+    let mut pts = h.to_vec();
     for k in 1..=interior {
         let val = k as f64;
         let mult = knots.iter().filter(|&&x| (x - val).abs() < 1e-9).count();
         for _ in mult..P {
-            knot_insert(&mut knots, &mut pts, val, P);
+            knot_insert_homog(&mut knots, &mut pts, val, P);
         }
     }
 
     (0..=interior).map(|s| {
         let b = s * P;
-        RationalBezier::polynomial(vec![pts[b], pts[b + 1], pts[b + 2], pts[b + 3]])
+        RationalBezier::from_homogeneous(&pts[b..b + 4])
     }).collect()
 }
 
-/// Insert knot `val` once into a degree-`p` B-spline (Böhm), updating `knots`/`pts`.
-fn knot_insert(knots: &mut Vec<f64>, pts: &mut Vec<Point2d>, val: f64, p: usize) {
+/// Insert knot `val` once into a degree-`p` B-spline whose control points are in
+/// homogeneous coords `[x, y, w]` (Böhm), updating `knots`/`pts`.
+fn knot_insert_homog(knots: &mut Vec<f64>, pts: &mut Vec<[f64; 3]>, val: f64, p: usize) {
     // Span k: the last index with knots[k] <= val < knots[k+1].
     let mut k = p;
     while k + 1 < knots.len() && !(knots[k] <= val && val < knots[k + 1]) { k += 1; }
 
-    let mut out: Vec<Point2d> = Vec::with_capacity(pts.len() + 1);
+    let mut out: Vec<[f64; 3]> = Vec::with_capacity(pts.len() + 1);
     out.extend_from_slice(&pts[..=k - p]);                 // unchanged front
     for i in (k - p + 1)..=k {
         let denom = knots[i + p] - knots[i];
         let a = if denom.abs() < 1e-12 { 0.0 } else { (val - knots[i]) / denom };
-        let prev = pts[i - 1];
-        let cur = pts[i];
-        out.push(Point2d::new((1.0 - a) * prev.x + a * cur.x,
-                              (1.0 - a) * prev.y + a * cur.y));
+        let q = pts[i - 1];
+        let r = pts[i];
+        out.push([(1.0 - a) * q[0] + a * r[0],
+                  (1.0 - a) * q[1] + a * r[1],
+                  (1.0 - a) * q[2] + a * r[2]]);
     }
     out.extend_from_slice(&pts[k..]);                      // unchanged tail (shifted)
     *pts = out;
@@ -509,6 +591,40 @@ mod tests {
                     "sample {q:?} outside control hull");
             }
         }
+    }
+
+    #[test]
+    fn nurbs_curve_clamped_with_uniform_weights() {
+        let cvs = vec![pt(0.0, 0.0), pt(2.0, 4.0), pt(6.0, 4.0), pt(8.0, 0.0), pt(10.0, 4.0)];
+        let nc = NurbsCurve::uniform(cvs.clone());
+        // Clamped: the curve passes through the first and last control vertex.
+        let s = nc.evaluate_f64(0.0);
+        let e = nc.evaluate_f64(1.0);
+        assert!((s.0 - 0.0).abs() < 1e-9 && (s.1 - 0.0).abs() < 1e-9, "start {s:?}");
+        assert!((e.0 - 10.0).abs() < 1e-9 && (e.1 - 4.0).abs() < 1e-9, "end {e:?}");
+        // bbox = control hull; uniform-weight segments match the unweighted decomposition.
+        let bb = nc.bounding_box();
+        assert!((bb.min.x - 0.0).abs() < 1e-9 && (bb.max.x - 10.0).abs() < 1e-9);
+        assert_eq!(nc.segments(), cv_spline_segments(&cvs));
+        assert!(nc.arc_length() > 0.0);
+    }
+
+    #[test]
+    fn nurbs_weight_pulls_curve_toward_vertex() {
+        // Raising the weight on a control vertex pulls the curve toward it (the
+        // headline rational/conic behaviour — proves weighted decomposition works).
+        let cvs = vec![pt(0.0, 0.0), pt(2.0, 4.0), pt(6.0, 4.0), pt(8.0, 0.0), pt(10.0, 4.0)];
+        let target = (6.0, 4.0); // cvs[2]
+        let min_dist = |nc: &NurbsCurve| (0..=40)
+            .map(|i| { let p = nc.evaluate_f64(i as f64 / 40.0);
+                       ((p.0 - target.0).powi(2) + (p.1 - target.1).powi(2)).sqrt() })
+            .fold(f64::MAX, f64::min);
+
+        let uniform = NurbsCurve::uniform(cvs.clone());
+        let mut w = vec![1.0; cvs.len()]; w[2] = 8.0;
+        let heavy = NurbsCurve::new(cvs.clone(), w);
+        assert!(min_dist(&heavy) < min_dist(&uniform),
+            "raising weight[2] should pull the curve closer to cvs[2]");
     }
 
     #[test]

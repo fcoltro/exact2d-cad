@@ -8,7 +8,7 @@
 //! Older files that stored exact rationals as `num/den` still load (parsed as f64).
 
 use std::io::Write;
-use exact2d_geometry::{Curve, Point2d, LineSeg, CircularArc, EllipticalArc, CubicBezier, PolyCurve, RationalBezier};
+use exact2d_geometry::{Curve, Point2d, LineSeg, CircularArc, EllipticalArc, CubicBezier, PolyCurve, RationalBezier, NurbsCurve};
 use exact2d_document::{Document, EntityKind, Entity, Layer, Color, LineTypeRef, LineTypeDef, Units};
 
 const TAU: f64 = std::f64::consts::TAU;
@@ -72,7 +72,9 @@ fn write_entity(s: &mut String, e: &Entity) {
             s.push_str(&format!("E BEZIER {} {} {} {} {} {}\n",
                 layer, color, pt(&b.p0), pt(&b.p1), pt(&b.p2), pt(&b.p3))),
         EntityKind::Curve(Curve::Rational(rb)) =>
-            s.push_str(&format!("E RATIONAL {} {} {}\n", layer, color, rational_fields(rb))),
+            s.push_str(&format!("E RATIONAL {} {} {}\n", layer, color, control_fields(&rb.points, &rb.weights))),
+        EntityKind::Curve(Curve::Nurbs(nc)) =>
+            s.push_str(&format!("E NURBS {} {} {}\n", layer, color, control_fields(&nc.control, &nc.weights))),
         EntityKind::Curve(Curve::Poly(pc)) => {
             s.push_str(&format!("E POLY {} {} {}\n", layer, color, pc.segments.len()));
             for seg in &pc.segments { write_segment(s, seg); }
@@ -93,15 +95,15 @@ fn write_segment(s: &mut String, seg: &Curve) {
             rat(a.center.x), rat(a.center.y), rat(a.radius), a.start_angle, a.end_angle)),
         Curve::Bezier(b) => s.push_str(&format!("SEG BEZIER {} {} {} {}\n",
             pt(&b.p0), pt(&b.p1), pt(&b.p2), pt(&b.p3))),
-        Curve::Rational(rb) => s.push_str(&format!("SEG RATIONAL {}\n", rational_fields(rb))),
+        Curve::Rational(rb) => s.push_str(&format!("SEG RATIONAL {}\n", control_fields(&rb.points, &rb.weights))),
         _ => s.push_str("SEG LINE 0;0 0;0\n"),
     }
 }
 
-/// Serialize a rational Bézier's control data: `n p0 w0 p1 w1 … p(n-1) w(n-1)`.
-fn rational_fields(rb: &RationalBezier) -> String {
-    let mut out = rb.points.len().to_string();
-    for (p, w) in rb.points.iter().zip(&rb.weights) {
+/// Serialize control data: `n p0 w0 p1 w1 … p(n-1) w(n-1)` (rational Béziers + NURBS).
+fn control_fields(points: &[Point2d], weights: &[f64]) -> String {
+    let mut out = points.len().to_string();
+    for (p, w) in points.iter().zip(weights) {
         out.push_str(&format!(" {} {}", pt(p), rat(*w)));
     }
     out
@@ -183,7 +185,10 @@ fn parse_entity<'a>(
             let p2 = parse_pt(tok.next()); let p3 = parse_pt(tok.next());
             Some(EntityKind::Curve(Curve::Bezier(CubicBezier::new(p0, p1, p2, p3))))
         }
-        "RATIONAL" => parse_rational(tok).map(|rb| EntityKind::Curve(Curve::Rational(rb))),
+        "RATIONAL" => parse_control_data(tok)
+            .map(|(p, w)| EntityKind::Curve(Curve::Rational(RationalBezier::new(p, w)))),
+        "NURBS" => parse_control_data(tok)
+            .map(|(c, w)| EntityKind::Curve(Curve::Nurbs(NurbsCurve::new(c, w)))),
         "POINT" => Some(EntityKind::Point(parse_pt(tok.next()))),
         "TEXT" => {
             let anchor = parse_pt(tok.next());
@@ -225,14 +230,18 @@ fn parse_segment(line: &str) -> Option<Curve> {
         }
         "BEZIER" => Some(Curve::Bezier(CubicBezier::new(
             parse_pt(tok.next()), parse_pt(tok.next()), parse_pt(tok.next()), parse_pt(tok.next())))),
-        "RATIONAL" => parse_rational(&mut tok).map(Curve::Rational),
+        "RATIONAL" => parse_control_data(&mut tok)
+            .map(|(p, w)| Curve::Rational(RationalBezier::new(p, w))),
         _ => None,
     }
 }
 
 /// Parse `n p0 w0 p1 w1 … p(n-1) w(n-1)` into a `RationalBezier`; `None` if the
 /// control data is malformed (fewer than 2 points or a non-positive weight).
-fn parse_rational<'a, I: Iterator<Item = &'a str>>(tok: &mut I) -> Option<RationalBezier> {
+/// Parse `n p0 w0 p1 w1 … p(n-1) w(n-1)` into `(control points, weights)`; `None`
+/// if malformed (fewer than 2 points or a non-positive weight). Shared by the
+/// rational-Bézier and NURBS records.
+fn parse_control_data<'a, I: Iterator<Item = &'a str>>(tok: &mut I) -> Option<(Vec<Point2d>, Vec<f64>)> {
     let n: usize = tok.next().and_then(|v| v.parse().ok())?;
     let mut points = Vec::with_capacity(n);
     let mut weights = Vec::with_capacity(n);
@@ -241,7 +250,7 @@ fn parse_rational<'a, I: Iterator<Item = &'a str>>(tok: &mut I) -> Option<Ration
         weights.push(parse_num(tok.next().unwrap_or("1")));
     }
     (points.len() >= 2 && points.len() == weights.len() && weights.iter().all(|&w| w > 0.0))
-        .then(|| RationalBezier::new(points, weights))
+        .then_some((points, weights))
 }
 
 // ── Field helpers ─────────────────────────────────────────────────────────────
@@ -436,6 +445,27 @@ mod tests {
             assert!(pc.segments.iter().all(|s| matches!(s, Curve::Rational(_))));
         } else {
             panic!("expected a PolyCurve of rational segments");
+        }
+    }
+
+    #[test]
+    fn roundtrip_nurbs_is_lossless() {
+        // An editable NURBS spline (control vertices + non-uniform weights) must
+        // round-trip bit-exactly via the E NURBS record.
+        let mut doc = Document::new();
+        let nc = NurbsCurve::new(
+            vec![pt_i(0, 0), pt_i(2, 5), pt_i(6, 5), pt_i(9, 0), pt_i(12, 4)],
+            vec![1.0, 2.0, 0.5, 1.0, 3.0],
+        );
+        doc.add(EntityKind::Curve(Curve::Nurbs(nc.clone())));
+
+        let doc2 = from_string(&to_string(&doc)).unwrap();
+        let e = doc2.iter().next().expect("one entity");
+        if let EntityKind::Curve(Curve::Nurbs(n2)) = &e.kind {
+            assert_eq!(n2.control, nc.control, "control vertices must survive exactly");
+            assert_eq!(n2.weights, nc.weights, "weights must survive exactly");
+        } else {
+            panic!("expected a NURBS curve after round-trip");
         }
     }
 

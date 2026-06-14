@@ -1,5 +1,6 @@
 use crate::curve::Curve;
 use crate::primitives::{CircularArc, EllipticalArc, CubicBezier, PolyCurve};
+use crate::nurbs::NurbsCurve;
 
 /// Split `curve` at parameter `t` into two sub-curves: (before_t, after_t).
 pub fn split_curve(curve: &Curve, t: f64) -> (Curve, Curve) {
@@ -58,6 +59,11 @@ pub fn split_curve(curve: &Curve, t: f64) -> (Curve, Curve) {
             let (a, b) = rb.split(t);
             (Curve::Rational(a), Curve::Rational(b))
         }
+        Curve::Nurbs(nc) => {
+            // Split via the rational-Bézier decomposition (returns PolyCurves).
+            let segs = nc.segments().into_iter().map(Curve::Rational).collect();
+            split_curve(&Curve::Poly(Box::new(PolyCurve::new(segs))), t)
+        }
     }
 }
 
@@ -83,6 +89,10 @@ pub fn reverse_curve(curve: &Curve) -> Curve {
             Curve::Poly(Box::new(PolyCurve::new(reversed_segs)))
         }
         Curve::Rational(rb) => Curve::Rational(rb.reverse()),
+        Curve::Nurbs(nc) => Curve::Nurbs(NurbsCurve::new(
+            nc.control.iter().rev().cloned().collect(),
+            nc.weights.iter().rev().cloned().collect(),
+        )),
     }
 }
 

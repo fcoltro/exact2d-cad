@@ -2,7 +2,7 @@
 //! machine that consumes clicked points and emits `ToolEvent`s. Tools are pure and
 //! testable — they never touch the document directly; `AppState` applies the events.
 
-use exact2d_geometry::{Curve, LineSeg, CircularArc, Point2d, Transform2d, PolyCurve, cv_spline_segments};
+use exact2d_geometry::{Curve, LineSeg, CircularArc, Point2d, Transform2d, PolyCurve, NurbsCurve, cv_spline_segments};
 use exact2d_document::{EntityKind, EntityId};
 
 /// The active tool and its in-progress state.
@@ -479,24 +479,17 @@ impl Tool {
     }
 }
 
-/// Build the entity a finished CV spline commits to. Two vertices → a line; 3–4 →
-/// one rational Bézier; ≥5 → a clamped cubic B-spline (local control) as a PolyCurve
-/// of rational-Bézier segments. Fewer than two vertices is a no-op.
+/// Build the entity a finished CV spline commits to. Two vertices → a line; ≥3 → an
+/// editable `Curve::Nurbs` (a clamped cubic NURBS storing the control vertices +
+/// unit weights). Fewer than two vertices is a no-op.
 fn spline_event(cv: &[Point2d]) -> ToolEvent {
-    if cv.len() < 2 {
-        return ToolEvent::Pending;
+    match cv.len() {
+        0 | 1 => ToolEvent::Pending,
+        2 => ToolEvent::Create(vec![EntityKind::Curve(
+            Curve::Line(LineSeg::from_endpoints(cv[0], cv[1])))]),
+        _ => ToolEvent::Create(vec![EntityKind::Curve(
+            Curve::Nurbs(NurbsCurve::uniform(cv.to_vec())))]),
     }
-    if cv.len() == 2 {
-        return ToolEvent::Create(vec![EntityKind::Curve(
-            Curve::Line(LineSeg::from_endpoints(cv[0], cv[1])))]);
-    }
-    let mut segs = cv_spline_segments(cv);
-    let curve = if segs.len() == 1 {
-        Curve::Rational(segs.pop().unwrap())
-    } else {
-        Curve::Poly(Box::new(PolyCurve::new(segs.into_iter().map(Curve::Rational).collect())))
-    };
-    ToolEvent::Create(vec![EntityKind::Curve(curve)])
 }
 
 /// The 4 line segments of an axis-aligned rectangle from opposite corners.
@@ -665,20 +658,21 @@ mod tests {
     }
 
     #[test]
-    fn cv_spline_four_cvs_commit_one_rational() {
+    fn cv_spline_commits_to_editable_nurbs() {
         let mut t = Tool::Spline { pts: vec![] };
-        for p in [pt(0, 0), pt(5, 5), pt(10, -5), pt(15, 0)] {
+        let cvs = [pt(0, 0), pt(5, 5), pt(10, -5), pt(15, 0), pt(20, 6), pt(25, 0)];
+        for p in cvs {
             assert!(matches!(t.on_point(p), ToolEvent::Pending)); // no auto-commit
         }
-        // 4 CVs → a single cubic rational Bézier (its control polygon = the vertices).
+        // ≥3 CVs → an editable Curve::Nurbs storing the control vertices + unit weights.
         match t.commit() {
             ToolEvent::Create(es) => match &es[0] {
-                EntityKind::Curve(Curve::Rational(rb)) => {
-                    assert_eq!(rb.points.len(), 4);
-                    assert_eq!(rb.degree(), 3);
-                    assert!(rb.weights.iter().all(|&w| w == 1.0));
+                EntityKind::Curve(Curve::Nurbs(nc)) => {
+                    assert_eq!(nc.control.len(), cvs.len());
+                    assert_eq!(nc.control[0], cvs[0]);
+                    assert!(nc.weights.iter().all(|&w| w == 1.0));
                 }
-                o => panic!("expected a Rational curve, got {:?}", o),
+                o => panic!("expected a Nurbs curve, got {:?}", o),
             },
             o => panic!("{:?}", o),
         }
@@ -686,23 +680,12 @@ mod tests {
     }
 
     #[test]
-    fn cv_spline_many_cvs_commit_bspline_polycurve() {
+    fn cv_spline_two_points_is_a_line() {
         let mut t = Tool::Spline { pts: vec![] };
-        for p in [pt(0, 0), pt(5, 5), pt(10, -5), pt(15, 0), pt(20, 6), pt(25, 0)] {
-            assert!(matches!(t.on_point(p), ToolEvent::Pending));
-        }
-        // 6 CVs → a clamped cubic B-spline = a PolyCurve of cubic rational segments.
-        match t.commit() {
-            ToolEvent::Create(es) => match &es[0] {
-                EntityKind::Curve(Curve::Poly(pc)) => {
-                    assert_eq!(pc.segments.len(), 3); // 6 CVs → 3 cubic spans
-                    assert!(pc.segments.iter().all(|s| matches!(s, Curve::Rational(_))));
-                }
-                o => panic!("expected a PolyCurve of rational segments, got {:?}", o),
-            },
-            o => panic!("{:?}", o),
-        }
-        assert!(matches!(t, Tool::Spline { ref pts } if pts.is_empty()));
+        t.on_point(pt(0, 0));
+        t.on_point(pt(4, 2));
+        assert!(matches!(t.commit(),
+            ToolEvent::Create(es) if matches!(es[0], EntityKind::Curve(Curve::Line(_)))));
     }
 
     #[test]

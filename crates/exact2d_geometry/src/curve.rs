@@ -1,6 +1,6 @@
 use crate::point::BoundingBox;
 use crate::primitives::{LineSeg, CircularArc, EllipticalArc, CubicBezier, PolyCurve};
-use crate::nurbs::RationalBezier;
+use crate::nurbs::{RationalBezier, NurbsCurve};
 
 // ── CurveSegment trait ────────────────────────────────────────────────────────
 
@@ -50,6 +50,9 @@ pub enum Curve {
     /// A weighted rational Bézier — a first-class authored NURBS/spline segment
     /// (and the kernel's unified "lowered" form). Parameter `t ∈ [0,1]`.
     Rational(RationalBezier),
+    /// A clamped cubic NURBS / control-vertex spline (control vertices + weights) —
+    /// the authored, editable spline. Decomposes to rational Béziers on demand.
+    Nurbs(NurbsCurve),
 }
 
 impl Curve {
@@ -66,6 +69,7 @@ impl CurveSegment for Curve {
             Curve::Bezier(v)   => v.domain(),
             Curve::Poly(v)     => v.domain(),
             Curve::Rational(v) => v.domain(),
+            Curve::Nurbs(v)    => v.domain(),
         }
     }
     fn evaluate_f64(&self, t: f64) -> (f64, f64) {
@@ -76,6 +80,7 @@ impl CurveSegment for Curve {
             Curve::Bezier(v)   => v.evaluate_f64(t),
             Curve::Poly(v)     => v.evaluate_f64(t),
             Curve::Rational(v) => v.evaluate_f64(t),
+            Curve::Nurbs(v)    => v.evaluate_f64(t),
         }
     }
     fn bounding_box(&self) -> BoundingBox {
@@ -86,6 +91,7 @@ impl CurveSegment for Curve {
             Curve::Bezier(v)   => v.bounding_box(),
             Curve::Poly(v)     => v.bounding_box(),
             Curve::Rational(v) => v.bounding_box(),
+            Curve::Nurbs(v)    => v.bounding_box(),
         }
     }
     fn tangent_f64(&self, t: f64) -> (f64, f64) {
@@ -96,6 +102,7 @@ impl CurveSegment for Curve {
             Curve::Bezier(v)   => v.tangent_f64(t),
             Curve::Poly(v)     => v.tangent_f64(t),
             Curve::Rational(v) => v.tangent_f64(t),
+            Curve::Nurbs(v)    => v.tangent_f64(t),
         }
     }
     fn arc_length(&self) -> f64 {
@@ -106,6 +113,7 @@ impl CurveSegment for Curve {
             Curve::Bezier(v)   => v.arc_length(),
             Curve::Poly(v)     => v.arc_length(),
             Curve::Rational(v) => v.arc_length(),
+            Curve::Nurbs(v)    => v.arc_length(),
         }
     }
 }

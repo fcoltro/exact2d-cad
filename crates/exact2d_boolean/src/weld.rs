@@ -11,7 +11,7 @@
 //! `Point2d::from_f64`, i.e. already requantised to ~12 significant digits, so
 //! welding also keeps the boolean inputs free of swollen BigInt denominators.
 
-use exact2d_geometry::{Curve, CurveSegment, Point2d, LineSeg, CubicBezier, PolyCurve, RationalBezier};
+use exact2d_geometry::{Curve, CurveSegment, Point2d, LineSeg, CubicBezier, PolyCurve, RationalBezier, NurbsCurve};
 use crate::region::Region;
 
 /// Default drawing tolerance for welding boundary seams.
@@ -172,6 +172,21 @@ fn snap_endpoints(c: &Curve, s: (f64, f64), e: (f64, f64)) -> Curve {
             pts[0] = Point2d::from_f64(s.0, s.1);
             pts[n - 1] = Point2d::from_f64(e.0, e.1);
             Curve::Rational(RationalBezier::new(pts, rb.weights.clone()))
+        }
+        Curve::Nurbs(nc) => {
+            // Same as a Bézier, on the control vertices: pin the ends, shift the
+            // adjacent control vertex (when distinct) to keep the end tangent.
+            let mut cv = nc.control.clone();
+            let n = cv.len();
+            let d_start = (s.0 - cv[0].x, s.1 - cv[0].y);
+            let d_end = (e.0 - cv[n - 1].x, e.1 - cv[n - 1].y);
+            if n >= 4 {
+                cv[1] = Point2d::from_f64(cv[1].x + d_start.0, cv[1].y + d_start.1);
+                cv[n - 2] = Point2d::from_f64(cv[n - 2].x + d_end.0, cv[n - 2].y + d_end.1);
+            }
+            cv[0] = Point2d::from_f64(s.0, s.1);
+            cv[n - 1] = Point2d::from_f64(e.0, e.1);
+            Curve::Nurbs(NurbsCurve::new(cv, nc.weights.clone()))
         }
     }
 }

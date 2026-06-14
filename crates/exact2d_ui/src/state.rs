@@ -806,7 +806,7 @@ mod tests {
     }
 
     #[test]
-    fn cv_spline_command_commits_to_rational() {
+    fn cv_spline_command_commits_to_nurbs() {
         let mut a = app();
         a.run_command("SPLINE");
         assert!(matches!(a.tool, Tool::Spline { .. }));
@@ -817,12 +817,12 @@ mod tests {
         }
         a.run_command(""); // Enter finishes the CV spline
         assert!(matches!(a.tool, Tool::Select));
-        assert_eq!(a.document.len(), 2); // 1 Rational curve + origin
+        assert_eq!(a.document.len(), 2); // 1 NURBS curve + origin
 
         let entity = a.document.iter().find(|e| e.id != a.origin_id).unwrap();
         match &entity.kind {
-            EntityKind::Curve(Curve::Rational(rb)) => assert_eq!(rb.points.len(), 4),
-            other => panic!("expected a Rational curve, got {:?}", other),
+            EntityKind::Curve(Curve::Nurbs(nc)) => assert_eq!(nc.control.len(), 4),
+            other => panic!("expected a NURBS curve, got {:?}", other),
         }
     }
 

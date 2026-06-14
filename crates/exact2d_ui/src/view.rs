@@ -7,7 +7,7 @@
 
 use egui::{Context, CentralPanel, Sense, Stroke, Color32, pos2, vec2};
 use exact2d_geometry::Point2d;
-use exact2d_document::{Color, EntityKind};
+use exact2d_document::{Color, EntityKind, EntityId};
 
 use crate::state::AppState;
 use crate::tools::Tool;
@@ -68,6 +68,62 @@ fn canvas(ctx: &Context, app: &mut AppState, ui_state: &mut UiState, palette_ope
         let origin = rect.min;
         let painter = ui.painter_at(rect);
 
+        // ── NURBS control-vertex grips: drag to reshape, +/- to reweight ──
+        // When exactly one NURBS spline is selected, its control vertices are square
+        // grips. Dragging one moves that vertex; +/- over a grip changes its weight
+        // (pulling the curve toward/away from the vertex). Grabbing a grip takes
+        // priority over starting a marquee. (Drawn later, after `to_screen` exists.)
+        const GRIP_HIT: f32 = 7.0; // screen-px pick radius
+        let grip_active_id = egui::Id::new("nurbs_grip_active");
+        let grip_idx_id = egui::Id::new("nurbs_grip");
+        let mut grip_drag_started = false;
+        if let Some((nid, ctrl, _w)) =
+            (matches!(app.tool, Tool::Select) && app.corner_action.is_none())
+                .then(|| app.selected_nurbs()).flatten()
+        {
+            // Screen positions of the control vertices (computed before any mutation
+            // so the immutable view borrow doesn't clash with editing `app`).
+            let grip_scr: Vec<egui::Pos2> = ctrl.iter().map(|p| {
+                let (sx, sy) = app.view.world_to_screen(p.x, p.y);
+                egui::pos2(origin.x + sx as f32, origin.y + sy as f32)
+            }).collect();
+            let hit = |pp: egui::Pos2| grip_scr.iter().position(|g| (*g - pp).length() <= GRIP_HIT);
+
+            if response.drag_started_by(egui::PointerButton::Primary) {
+                if let Some(idx) = response.interact_pointer_pos().and_then(hit) {
+                    app.begin_edit(); // one undo step for the whole drag
+                    ctx.data_mut(|d| {
+                        d.insert_temp(grip_active_id, true);
+                        d.insert_temp(grip_idx_id, (nid, idx));
+                    });
+                    grip_drag_started = true;
+                }
+            }
+            if response.dragged_by(egui::PointerButton::Primary)
+                && ctx.data(|d| d.get_temp::<bool>(grip_active_id).unwrap_or(false))
+            {
+                if let (Some(pp), Some((gid, idx))) =
+                    (response.interact_pointer_pos(), ctx.data(|d| d.get_temp::<(EntityId, usize)>(grip_idx_id)))
+                {
+                    let (wx, wy) = app.view.screen_to_world((pp.x - origin.x) as f64, (pp.y - origin.y) as f64);
+                    app.set_nurbs_control(gid, idx, exact2d_geometry::Point2d::from_f64(wx, wy));
+                }
+            }
+            // +/- adjusts the weight of the grip under the cursor (not while typing).
+            if !ctx.memory(|m| m.focused().is_some()) {
+                if let Some(idx) = response.hover_pos().and_then(hit) {
+                    let (inc, dec) = ui.input(|i| (
+                        i.key_pressed(egui::Key::Plus) || i.key_pressed(egui::Key::Equals),
+                        i.key_pressed(egui::Key::Minus),
+                    ));
+                    if inc { app.adjust_nurbs_weight(nid, idx, 1.25); }
+                    if dec { app.adjust_nurbs_weight(nid, idx, 0.8); }
+                }
+            }
+        }
+        if response.drag_stopped() {
+            ctx.data_mut(|d| d.insert_temp(grip_active_id, false));
+        }
 
         // ── Marquee box selection (AutoCAD window/crossing) ──
         // Left-drag on empty space draws a box: left→right = WINDOW (only entities
@@ -75,7 +131,7 @@ fn canvas(ctx: &Context, app: &mut AppState, ui_state: &mut UiState, palette_ope
         // dashed). Drags that begin on a grip or while the corner grip is active are
         // left to those interactions.
         if matches!(app.tool, Tool::Select) {
-            if response.drag_started_by(egui::PointerButton::Primary) && app.corner_action.is_none() {
+            if response.drag_started_by(egui::PointerButton::Primary) && app.corner_action.is_none() && !grip_drag_started {
                 if let Some(p) = response.interact_pointer_pos() {
                     ctx.data_mut(|d| {
                         d.insert_temp(egui::Id::new("marquee_start"), p);
@@ -424,6 +480,29 @@ fn canvas(ctx: &Context, app: &mut AppState, ui_state: &mut UiState, palette_ope
             };
             let width = if selected { 2.5 } else if hovered { 2.0 } else { 1.5 };
             draw_entity(&painter, app, e, origin, Stroke::new(width, color));
+        }
+
+        // NURBS spline grips: the control polygon + a square at each control vertex
+        // (grip size hints the weight). Drag to reshape; +/- over a grip reweights.
+        if matches!(app.tool, Tool::Select) && app.corner_action.is_none() {
+            if let Some((_, ctrl, weights)) = app.selected_nurbs() {
+                let pts: Vec<egui::Pos2> = ctrl.iter().map(|p| to_screen(p.x, p.y)).collect();
+                for w in pts.windows(2) {
+                    painter.line_segment([w[0], w[1]], Stroke::new(1.0, Color32::from_rgb(90, 110, 140)));
+                }
+                let hover = response.hover_pos();
+                for (i, g) in pts.iter().enumerate() {
+                    let hovered = hover.map(|h| (h - *g).length() <= GRIP_HIT).unwrap_or(false);
+                    // Half-size grows with weight (heavier vertex = bigger grip).
+                    let mut half = (3.0 + weights[i].ln()).clamp(2.5, 7.0) as f32;
+                    if hovered { half += 1.5; }
+                    let col = if hovered { Color32::from_rgb(255, 220, 120) } else { Color32::from_rgb(255, 180, 60) };
+                    let body = egui::Rect::from_center_size(*g, egui::vec2(half * 2.0, half * 2.0));
+                    let border = egui::Rect::from_center_size(*g, egui::vec2(half * 2.0 + 2.0, half * 2.0 + 2.0));
+                    painter.rect_filled(border, 1.0, Color32::from_rgb(40, 30, 10));
+                    painter.rect_filled(body, 1.0, col);
+                }
+            }
         }
 
         // Contextual corner grips: blue dots on every fillettable corner (idle)

@@ -2,7 +2,7 @@
 //! drives. Owns the document, view, active tool, selection, snap settings, status
 //! toggles, command log, and undo/redo history. No egui or GPU dependencies.
 
-use exact2d_geometry::Point2d;
+use exact2d_geometry::{Point2d, Curve};
 use exact2d_document::{Document, EntityKind, EntityId, Layer};
 use exact2d_cad::{SnapSettings, SnapPoint, best_snap, pick_at};
 
@@ -439,6 +439,48 @@ impl AppState {
         self.document.add(kind)
     }
 
+    // ── NURBS spline grip editing (spec §6 direct manipulation) ─────────────────
+
+    /// If exactly one selected entity is a NURBS spline, return its id, control
+    /// vertices, and weights (for the canvas to draw grips and hit-test).
+    pub fn selected_nurbs(&self) -> Option<(EntityId, Vec<Point2d>, Vec<f64>)> {
+        if self.selection.len() != 1 { return None; }
+        let id = self.selection[0];
+        if let EntityKind::Curve(Curve::Nurbs(nc)) = &self.document.get(id)?.kind {
+            Some((id, nc.control.clone(), nc.weights.clone()))
+        } else {
+            None
+        }
+    }
+
+    /// Snapshot history before an interactive edit (call once at a grip-drag start).
+    pub fn begin_edit(&mut self) {
+        self.history.snapshot(&self.document);
+    }
+
+    /// Move a NURBS control vertex to `p`. No history snapshot — the caller takes one
+    /// at drag start via [`begin_edit`], so a whole drag is a single undo step.
+    pub fn set_nurbs_control(&mut self, id: EntityId, index: usize, p: Point2d) {
+        if let Some(e) = self.document.get_mut(id) {
+            if let EntityKind::Curve(Curve::Nurbs(nc)) = &mut e.kind {
+                if index < nc.control.len() { nc.control[index] = p; }
+            }
+        }
+    }
+
+    /// Multiply a NURBS control vertex's weight by `factor` (clamped to a sane
+    /// positive range), snapshotting history. Returns true if it was applied.
+    pub fn adjust_nurbs_weight(&mut self, id: EntityId, index: usize, factor: f64) -> bool {
+        let ok = matches!(self.document.get(id).map(|e| &e.kind),
+            Some(EntityKind::Curve(Curve::Nurbs(nc))) if index < nc.weights.len());
+        if !ok { return false; }
+        self.history.snapshot(&self.document);
+        if let Some(EntityKind::Curve(Curve::Nurbs(nc))) = self.document.get_mut(id).map(|e| &mut e.kind) {
+            nc.weights[index] = (nc.weights[index] * factor).clamp(0.05, 20.0);
+        }
+        true
+    }
+
     // ── File operations ───────────────────────────────────────────────────────
 
     /// Reset to a blank document (File > New).
@@ -824,6 +866,40 @@ mod tests {
             EntityKind::Curve(Curve::Nurbs(nc)) => assert_eq!(nc.control.len(), 4),
             other => panic!("expected a NURBS curve, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn nurbs_grip_edit_moves_control_and_weight() {
+        let mut a = app();
+        let nc = exact2d_geometry::NurbsCurve::uniform(vec![
+            Point2d::from_i64(0, 0), Point2d::from_i64(2, 4), Point2d::from_i64(6, 4),
+            Point2d::from_i64(8, 0), Point2d::from_i64(10, 4)]);
+        let id = a.add_entity(EntityKind::Curve(Curve::Nurbs(nc)));
+        a.selection = vec![id];
+
+        // selected_nurbs surfaces the control vertices for the grip UI.
+        let (sid, control, weights) = a.selected_nurbs().expect("a NURBS is selected");
+        assert_eq!(sid, id);
+        assert_eq!(control.len(), 5);
+        assert!(weights.iter().all(|&w| w == 1.0));
+
+        // Drag-move control vertex 2 (one undo step via begin_edit).
+        a.begin_edit();
+        a.set_nurbs_control(id, 2, Point2d::from_f64(6.0, 9.0));
+        let weight_at = |a: &AppState, i: usize| {
+            if let EntityKind::Curve(Curve::Nurbs(nc)) = &a.document.get(id).unwrap().kind {
+                (nc.control[i], nc.weights[i])
+            } else { panic!("expected NURBS") }
+        };
+        assert_eq!(weight_at(&a, 2).0, Point2d::from_f64(6.0, 9.0));
+
+        // Weight edits (clamped); undo restores the prior weight.
+        assert!(a.adjust_nurbs_weight(id, 2, 5.0));
+        assert!((weight_at(&a, 2).1 - 5.0).abs() < 1e-9);
+        a.adjust_nurbs_weight(id, 2, 100.0);            // would be 500 → clamped
+        assert!(weight_at(&a, 2).1 <= 20.0 + 1e-9);
+        a.undo();
+        assert!((weight_at(&a, 2).1 - 5.0).abs() < 1e-9, "undo restores the prior weight");
     }
 
     #[test]
